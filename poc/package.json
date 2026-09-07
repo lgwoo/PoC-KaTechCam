@@ -1,0 +1,22 @@
+{
+  "name": "neuringo-poc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "느링고 아키텍처 리스크 검증용 독립 PoC 테스트 하네스 (GPT/Gemini/Claude + OpenAI Moderation)",
+  "scripts": {
+    "test:all": "tsx src/runner.ts",
+    "test": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@google/generative-ai": "^0.24.1",
+    "dotenv": "^16.4.5",
+    "openai": "^4.104.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
