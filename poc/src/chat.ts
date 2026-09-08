@@ -394,11 +394,22 @@ async function main() {
         inputSafety.category === "PROFANITY"
           ? `\n\n[안전 지침] 아이가 방금 욕설을 썼다. 그 말을 그대로 맞받아치거나 따라 하지 말고, 아이가 느끼는 답답함이나 화남을 캐릭터로서 안전한 말로 표현하도록 부드럽게 도와줘.`
           : "";
-      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}`;
+
+      // GEN-02 재현: 이번 턴 시작 시점 기준으로 아직 안 끝난 목표가 있으면 그중 하나를
+      // 목표로 삼아 자연스럽게 유도하라고 생성 단계에 알려준다 — 정답을 직접 말해주면 안 됨.
+      // 이 목록은 스캔 콜을 기다릴 필요 없이 이미 계산돼있는 값이라 추가 지연이 없다.
+      const pendingGoals = activeScenario.microGoals.filter((mg) => !microGoalState.get(mg.id));
+      const targetGoal = pendingGoals[0];
+      const goalTargetingHint = targetGoal
+        ? `\n\n[학습 목표 지침] 아직 아이가 스스로 드러내지 않은 목표: "${targetGoal.description}"
+(이게 확인되면 인정하는 근거: ${targetGoal.requiredEvidence.join(", ")})
+정답을 직접 말해주지 말고, 아이가 스스로 이 부분을 말하도록 자연스럽게 유도하는 방향으로 반응하거나 되물어라.`
+        : `\n\n[학습 목표 지침] 목표를 다 확인했다. 자연스럽게 마무리하는 방향으로 반응하라.`;
+
+      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}${goalTargetingHint}`;
 
       // 마이크로 목표 스캔은 대사 생성과 서로 결과가 필요 없으니 동시에 돌린다 —
       // "몰래" 판정한다는 §5 취지에도 맞고(자연스러운 대화 흐름을 막지 않음), 병렬이라 시간도 거의 안 더해진다.
-      const pendingGoals = activeScenario.microGoals.filter((mg) => !microGoalState.get(mg.id));
       const [microGoalScan, delivered] = await Promise.all([
         scanMicroGoals(provider, pendingGoals, historyText),
         generateApprovedReply(provider, registry.moderation, activeScenario, activePersona, userInput),
