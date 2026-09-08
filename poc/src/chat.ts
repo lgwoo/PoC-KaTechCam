@@ -209,6 +209,54 @@ async function maskPii(provider: Provider, text: string): Promise<string> {
   return result.ok ? result.value.text.trim() : text;
 }
 
+// "역할극에 대해" 문서 §5 재현: "이번 턴은 이 목표만" 식으로 좁혀 보지 않고, 매 턴 지금까지의
+// 대화 전체를 놓고 아직 안 끝난 마이크로 목표를 전부 다시 스캔한다(누적 판단). ANA-01~09와
+// 달리 순서 상관없이 아이가 먼저 말해버린 것도 인정하기 위함 — 정식 스펙 아니라 PoC 가정.
+function buildMicroGoalScanPrompt(pendingGoals: typeof scenario.microGoals): string {
+  const goalList = pendingGoals
+    .map((g) => `- ${g.id}: ${g.description} (증거: ${g.requiredEvidence.join(", ")})`)
+    .join("\n");
+  return `너는 느링고의 원인 판단 에이전트다. 지금까지의 전체 대화를 보고, 아래 아직 달성되지 않은
+마이크로 목표 중 이번 대화에서 실제로 증거가 나타난 것이 있는지 전부 다시 스캔하라.
+목표 하나에만 집중하지 말고 목록 전체를 매번 확인하라 — 아이가 순서와 상관없이 먼저 말했어도 인정한다.
+${goalList}
+반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
+{"achieved": [{"micro_goal_id": string, "evidence": "대화에서 실제로 나온 근거 한 문장"}]}
+증거가 아직 없으면 achieved를 빈 배열로 둬라.`;
+}
+
+interface MicroGoalScanOutput {
+  achieved?: { micro_goal_id?: string; evidence?: string }[];
+}
+
+async function scanMicroGoals(
+  provider: Provider,
+  pendingGoals: typeof scenario.microGoals,
+  fullHistoryText: string,
+): Promise<{ achievedIds: string[]; evidenceById: Map<string, string>; latencyMs: number }> {
+  const start = Date.now();
+  if (pendingGoals.length === 0) {
+    return { achievedIds: [], evidenceById: new Map(), latencyMs: 0 };
+  }
+  const result = await safeCall(() =>
+    provider.complete({ system: buildMicroGoalScanPrompt(pendingGoals), user: fullHistoryText }),
+  );
+  const latencyMs = Date.now() - start;
+  if (!result.ok) {
+    return { achievedIds: [], evidenceById: new Map(), latencyMs };
+  }
+  const parsed = tryParseJson<MicroGoalScanOutput>(result.value.text);
+  const evidenceById = new Map<string, string>();
+  const achievedIds: string[] = [];
+  for (const item of parsed?.achieved ?? []) {
+    if (item.micro_goal_id && pendingGoals.some((g) => g.id === item.micro_goal_id)) {
+      achievedIds.push(item.micro_goal_id);
+      evidenceById.set(item.micro_goal_id, item.evidence ?? "");
+    }
+  }
+  return { achievedIds, evidenceById, latencyMs };
+}
+
 // node:readline/promises의 question()은 호출된 그 순간에만 'line' 리스너를 붙인다 —
 // AI 응답을 기다리는 동안(수 초) 사용자가 입력을 미리 쳐 두면, 그 사이 도착한 줄은
 // 리스너 없이 그냥 emit되어 유실된다. 큐로 직접 받아서 이 유실을 막는다.
@@ -272,6 +320,7 @@ async function main() {
   console.log(`"exit" 또는 "quit" 입력하면 종료.\n`);
 
   const transcript: { speaker: "아이" | "친구"; text: string }[] = [];
+  const microGoalState = new Map(scenario.microGoals.map((mg) => [mg.id, false]));
 
   const opening = scenario.openingPrompts.S1;
   console.log(`친구> ${opening}`);
@@ -329,10 +378,30 @@ async function main() {
           : "";
       const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}`;
 
-      const delivered = await generateApprovedReply(provider, registry.moderation, userInput);
+      // 마이크로 목표 스캔은 대사 생성과 서로 결과가 필요 없으니 동시에 돌린다 —
+      // "몰래" 판정한다는 §5 취지에도 맞고(자연스러운 대화 흐름을 막지 않음), 병렬이라 시간도 거의 안 더해진다.
+      const pendingGoals = scenario.microGoals.filter((mg) => !microGoalState.get(mg.id));
+      const [microGoalScan, delivered] = await Promise.all([
+        scanMicroGoals(provider, pendingGoals, historyText),
+        generateApprovedReply(provider, registry.moderation, userInput),
+      ]);
       const turnMs = Date.now() - turnStart;
+
+      for (const id of microGoalScan.achievedIds) {
+        microGoalState.set(id, true);
+      }
+      const statusLine = scenario.microGoals
+        .map((mg) => `${mg.id}:${microGoalState.get(mg.id) ? "✓" : "✗"}`)
+        .join(" ");
+      const newlyAchieved = microGoalScan.achievedIds
+        .map((id) => `${id}("${microGoalScan.evidenceById.get(id)}")`)
+        .join(", ");
+      console.log(
+        `  [마이크로목표 스캔 ${microGoalScan.latencyMs}ms] ${statusLine}${newlyAchieved ? ` — 신규 달성: ${newlyAchieved}` : ""}`,
+      );
+
       console.log(`친구> ${delivered.text}${delivered.fallbackUsed ? "  [기본 응답]" : ""}`);
-      console.log(`  [전체 소요 ${turnMs}ms(입력 안전검사 포함), 후보 ${delivered.candidateAttempts}개 생성]`);
+      console.log(`  [전체 소요 ${turnMs}ms(입력 안전검사+마이크로목표 스캔 포함), 후보 ${delivered.candidateAttempts}개 생성]`);
       transcript.push({ speaker: "친구", text: delivered.text });
     }
   } finally {
