@@ -38,11 +38,15 @@ export const scenarioJealousy = {
       requiredEvidence: ["단짝을 신경 쓰거나 앞으로의 부담을 이유로 든다."],
     },
   ] satisfies MicroGoal[],
+  // "역할극에 대해" 문서(§1) 지적 반영 — 아래는 스펙 원문 스타일(3인칭 설명+질문) 참고용으로만
+  // 남겨둔다. 실제 화면에는 mascotIntro/characterOpeningLine으로 화자를 분리해서 쓴다.
   openingPrompts: {
     S0: "친구 표정이 어때 보여?",
     S1: "친구가 상을 받았는데 표정이 어두워. 왜 그럴까?",
     S2: "친구는 좋으면서도 불편한 걸까, 아니면 그냥 안 기쁜 걸까?",
     S3: "친구는 상은 받아서 좋은데, 단짝 생각도 나고 앞으로 잘해야 한다는 부담도 느끼는 것 같아.",
   },
+  mascotIntro: "멍멍! 오늘 상 받은 친구 표정이 좀 이상해 보이는데, 같이 살펴볼까?",
+  characterOpeningLine: "(상장을 든 채 어색하게 웃으려다 만다) ...음, 고마워. 근데 그게... 좀 그러네.",
   maximumSupportTurnsPerMicroGoal: 4,
 };

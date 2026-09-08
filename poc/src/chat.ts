@@ -340,9 +340,12 @@ async function main() {
   const transcript: { speaker: "아이" | "친구"; text: string }[] = [];
   const microGoalState = new Map(activeScenario.microGoals.map((mg) => [mg.id, false]));
 
-  const opening = activeScenario.openingPrompts.S1;
-  console.log(`친구> ${opening}`);
-  transcript.push({ speaker: "친구", text: opening });
+  // 마스코트(도우미 강아지)와 캐릭터(친구)는 서로 다른 화자다 — 장면을 소개하는 3인칭 설명·질문은
+  // 마스코트 몫이고, 캐릭터는 항상 1인칭으로만 말한다. 마스코트는 매 턴 나오는 게 아니라
+  // 필요할 때만(세션 시작, 안전 개입 등) 나올 수도, 안 나올 수도 있다 — 세션 시작 시 한 번만 표시.
+  console.log(`마스코트> ${activeScenario.mascotIntro}`);
+  console.log(`친구> ${activeScenario.characterOpeningLine}`);
+  transcript.push({ speaker: "친구", text: activeScenario.characterOpeningLine });
 
   const rl = readline.createInterface({ input: stdin, output: stdout });
   const readLine = createLineReader(rl);
