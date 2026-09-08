@@ -99,14 +99,12 @@ async function generateApprovedReply(
 
     // SAFE-01: AI 출력도 아동 입력과 동일하게 안전 검사 대상 — LLM 판단만 믿지 않고
     // OpenAI Moderation으로 이중 확인한다 (한쪽이 놓쳐도 다른 쪽이 잡도록 하는 defense-in-depth).
-    const moderationResult = moderation.available
-      ? await safeCall(() => moderation.moderate(candidateText))
-      : null;
+    // 이 둘도 서로 독립적이라 동시에 호출한다.
+    const [moderationResult, judgeResult] = await Promise.all([
+      moderation.available ? safeCall(() => moderation.moderate(candidateText)) : Promise.resolve(null),
+      safeCall(() => provider.complete({ system: judgeSystemPrompt, user: candidateText })),
+    ]);
     const moderationFlagged = moderationResult?.ok === true && moderationResult.value.flagged;
-
-    const judgeResult = await safeCall(() =>
-      provider.complete({ system: judgeSystemPrompt, user: candidateText }),
-    );
 
     if (!judgeResult.ok) {
       // 판단 자체가 기술적으로 실패한 경우 (EVAL-06): 후보를 폐기하고 다시 생성.
@@ -186,10 +184,11 @@ async function checkChildInputSafety(
   moderation: ModerationClient,
   text: string,
 ): Promise<InputSafetyResult> {
-  const moderationResult = moderation.available ? await safeCall(() => moderation.moderate(text)) : null;
-  const judgeResult = await safeCall(() =>
-    provider.complete({ system: buildInputSafetyJudgePrompt(), user: text }),
-  );
+  // Moderation과 LLM 판단은 서로 결과를 필요로 하지 않으니 순차 대기하지 않고 동시에 호출한다.
+  const [moderationResult, judgeResult] = await Promise.all([
+    moderation.available ? safeCall(() => moderation.moderate(text)) : Promise.resolve(null),
+    safeCall(() => provider.complete({ system: buildInputSafetyJudgePrompt(), user: text })),
+  ]);
 
   let category = "PARSE_ERROR";
   let reason = "판정 파싱 실패";
