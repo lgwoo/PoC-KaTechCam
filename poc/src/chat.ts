@@ -295,6 +295,9 @@ async function main() {
       }
       if (trimmed === "") continue;
 
+      // 전체 턴 시간: 아동 입력 안전검사부터 최종 전달까지 실제 체감 왕복시간 전부 포함.
+      const turnStart = Date.now();
+
       const inputSafety = await checkChildInputSafety(provider, registry.moderation, trimmed);
       console.log(
         `  [입력 안전: ${inputSafety.category}] ${inputSafety.reason}${inputSafety.moderationFlagged === null ? "" : ` (Moderation flagged=${inputSafety.moderationFlagged})`}`,
@@ -327,11 +330,10 @@ async function main() {
           : "";
       const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}`;
 
-      const turnStart = Date.now();
       const delivered = await generateApprovedReply(provider, registry.moderation, userInput);
       const turnMs = Date.now() - turnStart;
       console.log(`친구> ${delivered.text}${delivered.fallbackUsed ? "  [기본 응답]" : ""}`);
-      console.log(`  [소요 ${turnMs}ms, 후보 ${delivered.candidateAttempts}개 생성]`);
+      console.log(`  [전체 소요 ${turnMs}ms(입력 안전검사 포함), 후보 ${delivered.candidateAttempts}개 생성]`);
       transcript.push({ speaker: "친구", text: delivered.text });
     }
   } finally {
