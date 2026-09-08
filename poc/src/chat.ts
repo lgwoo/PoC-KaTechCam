@@ -309,13 +309,17 @@ async function main() {
         contentForTranscript = await maskPii(provider, trimmed);
         console.log(`  [PII 마스킹] "${trimmed}" → "${contentForTranscript}"`);
       }
-      // PROFANITY는 SAFE-03에 따라 역할극을 중단하지 않고 그대로 진행한다 —
-      // 다만 위에서 이미 로그로 표시했으므로 캐릭터가 안전하게 반응하는지는 판단 에이전트가 이어서 검증한다.
 
       transcript.push({ speaker: "아이", text: contentForTranscript });
 
       const historyText = transcript.map((t) => `${t.speaker}: ${t.text}`).join("\n");
-      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.`;
+      // SAFE-03: 단순 욕설은 역할극을 중단하지 않되, 그 감정을 안전한 표현으로 전환하도록
+      // 캐릭터가 "도와야" 한다 — 우연히 그렇게 반응하길 기대하지 않고 생성 단계에 명시적으로 지시한다.
+      const profanityCoachingHint =
+        inputSafety.category === "PROFANITY"
+          ? `\n\n[안전 지침] 아이가 방금 욕설을 썼다. 그 말을 그대로 맞받아치거나 따라 하지 말고, 아이가 느끼는 답답함이나 화남을 캐릭터로서 안전한 말로 표현하도록 부드럽게 도와줘.`
+          : "";
+      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}`;
 
       const turnStart = Date.now();
       const delivered = await generateApprovedReply(provider, registry.moderation, userInput);
