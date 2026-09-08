@@ -5,7 +5,8 @@ import { scenario, type MicroGoal, type Scenario } from "./fixtures/scenario.js"
 import { scenarioJealousy } from "./fixtures/scenarioJealousy.js";
 import { friendPersona, awardWinnerPersona, type Persona } from "./fixtures/persona.js";
 import { buildRegistry, availableProviders } from "./providers/registry.js";
-import type { ModerationClient, Provider } from "./providers/types.js";
+import { moderationSeverity } from "./providers/moderation.js";
+import type { ModerationClient, ModerationResult, Provider } from "./providers/types.js";
 import { safeCall, tryParseJson } from "./util.js";
 
 dotenv.config();
@@ -129,17 +130,17 @@ async function generateApprovedReply(
     const safeToSend = judge?.safe_to_send === true && !moderationFlagged;
     const decision = moderationFlagged ? "SAFETY_REGENERATE" : (judge?.decision ?? "PARSE_ERROR");
 
+    const moderationNote = moderation.available
+      ? formatModerationDetail(moderationResult?.ok === true ? moderationResult.value : null)
+      : "";
+
     if (safeToSend && decision === "PASS") {
-      const moderationNote = moderation.available ? ` (Moderation flagged=${moderationFlagged})` : "";
       console.log(`  [판단: PASS, attempt ${attempt}] ${judge?.reason ?? ""}${moderationNote}`);
       return { text: candidateText, fallbackUsed: false, candidateAttempts: attempt };
     }
 
     if (moderationFlagged) {
-      const categories = moderationResult?.ok ? moderationResult.value.categories : [];
-      console.log(
-        `  [판단: SAFETY_REGENERATE, attempt ${attempt}] Moderation이 AI 후보를 유해로 판정 — categories: ${categories.join(", ") || "-"}`,
-      );
+      console.log(`  [판단: SAFETY_REGENERATE, attempt ${attempt}] Moderation이 AI 후보를 유해로 판정${moderationNote}`);
     } else {
       console.log(
         `  [판단: ${decision}, attempt ${attempt}] ${judge?.reason ?? "판정 파싱 실패"} — failure_codes: ${(judge?.failure_codes ?? []).join(", ") || "-"}`,
@@ -192,6 +193,16 @@ interface InputSafetyResult {
   category: string;
   reason: string;
   moderationFlagged: boolean | null;
+  moderationDetail: string;
+}
+
+// 로그에 카테고리별 확률 점수까지 보이게 — 그냥 "flagged=true"만으로는 뭐가 얼마나
+// 위험하다고 봤는지 알 수 없다.
+function formatModerationDetail(result: ModerationResult | null): string {
+  if (!result) return "";
+  if (!result.flagged) return " (Moderation flagged=false)";
+  const scores = result.categories.map((c) => `${c}=${result.categoryScores[c]?.toFixed(2)}`).join(" ");
+  return ` (Moderation flagged=true, severity=${moderationSeverity(result.categories)}, ${scores})`;
 }
 
 async function checkChildInputSafety(
@@ -216,8 +227,16 @@ async function checkChildInputSafety(
     reason = `판단 호출 오류: ${judgeResult.error}`;
   }
 
+  const moderatedOk = moderationResult?.ok === true ? moderationResult.value : null;
+  // CRITICAL(자해/아동성적 등)은 우리 자체 분류기가 뭐라 판정했든 무조건 RISK로 강제한다 —
+  // defense-in-depth: 한쪽이 놓쳐도 다른 쪽이 잡도록 하는 이중 안전망.
+  if (moderatedOk && moderationSeverity(moderatedOk.categories) === "CRITICAL" && category !== "RISK") {
+    reason = `Moderation이 CRITICAL(${moderatedOk.categories.join(", ")})로 판정 — 자체 분류(${category})보다 우선하여 RISK로 강제`;
+    category = "RISK";
+  }
+
   const moderationFlagged = !moderationResult ? null : moderationResult.ok ? moderationResult.value.flagged : null;
-  return { category, reason, moderationFlagged };
+  return { category, reason, moderationFlagged, moderationDetail: formatModerationDetail(moderatedOk) };
 }
 
 async function maskPii(provider: Provider, text: string): Promise<string> {
@@ -375,9 +394,7 @@ async function main() {
       const turnStart = Date.now();
 
       const inputSafety = await checkChildInputSafety(provider, registry.moderation, activeScenario, trimmed);
-      console.log(
-        `  [입력 안전: ${inputSafety.category}] ${inputSafety.reason}${inputSafety.moderationFlagged === null ? "" : ` (Moderation flagged=${inputSafety.moderationFlagged})`}`,
-      );
+      console.log(`  [입력 안전: ${inputSafety.category}] ${inputSafety.reason}${inputSafety.moderationDetail}`);
 
       if (inputSafety.category === "RISK") {
         // SAFE-04 / SAFETY_ESCALATION 재현: 일반 역할극보다 보호 절차를 우선한다.

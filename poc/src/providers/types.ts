@@ -22,6 +22,8 @@ export interface Provider {
 export interface ModerationResult {
   flagged: boolean;
   categories: string[];
+  /** flagged=true인 카테고리들의 확률 점수(0~1). 카테고리명 → 점수. */
+  categoryScores: Record<string, number>;
   latencyMs: number;
 }
 

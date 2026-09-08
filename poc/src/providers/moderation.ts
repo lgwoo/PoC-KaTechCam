@@ -1,6 +1,28 @@
 import OpenAI from "openai";
 import type { ModerationClient, ModerationResult } from "./types.js";
 
+export type ModerationSeverity = "CRITICAL" | "HIGH" | "MODERATE" | "NONE";
+
+// 카테고리별 대응 방안 — SAFE-04 "즉각적인 위험 가능성은 일반 역할극보다 보호 절차를 우선" 재현.
+// CRITICAL: 아동 입력이든 AI 출력이든, 우리 자체 분류기가 뭐라 했든 상관없이 즉시 RISK/차단 강제.
+// HIGH: 구체적 위협·그래픽 폭력 — AI 출력은 차단+재생성, 아동 입력은 마스코트 개입+화제전환.
+// MODERATE: 기존처럼 순화·코칭만 하고 역할극은 안 멈춤.
+const CRITICAL_CATEGORIES = new Set(["self-harm", "self-harm/intent", "self-harm/instructions", "sexual/minors"]);
+const HIGH_CATEGORIES = new Set([
+  "harassment/threatening",
+  "hate/threatening",
+  "illicit/violent",
+  "violence/graphic",
+  "sexual", // 아동 대상 서비스 특성상 일반 MODERATE보다 격상
+]);
+
+export function moderationSeverity(categories: string[]): ModerationSeverity {
+  if (categories.some((c) => CRITICAL_CATEGORIES.has(c))) return "CRITICAL";
+  if (categories.some((c) => HIGH_CATEGORIES.has(c))) return "HIGH";
+  if (categories.length > 0) return "MODERATE";
+  return "NONE";
+}
+
 export function buildModerationClient(): ModerationClient {
   // OPENAI_API_KEY는 GPT provider가 브릿지(Timely 등) 키로 쓸 수도 있어서 공유하면 충돌한다.
   // Moderation은 항상 진짜 OpenAI 키가 필요하므로 별도 변수를 우선 사용한다.
@@ -32,7 +54,11 @@ export function buildModerationClient(): ModerationClient {
       const categories = Object.entries(result?.categories ?? {})
         .filter(([, flagged]) => flagged)
         .map(([category]) => category);
-      return { flagged: result?.flagged ?? false, categories, latencyMs };
+      const rawScores = result?.category_scores as unknown as Record<string, number> | undefined;
+      const categoryScores = Object.fromEntries(
+        categories.map((category) => [category, rawScores?.[category] ?? 0]),
+      );
+      return { flagged: result?.flagged ?? false, categories, categoryScores, latencyMs };
     },
   };
 }
