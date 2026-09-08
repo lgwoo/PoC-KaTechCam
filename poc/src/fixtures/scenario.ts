@@ -46,3 +46,5 @@ export const scenario = {
   },
   maximumSupportTurnsPerMicroGoal: 4,
 };
+
+export type Scenario = typeof scenario;
