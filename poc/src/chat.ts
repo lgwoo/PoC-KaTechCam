@@ -25,6 +25,11 @@ const MAX_CANDIDATES = 3;
 // SAFE-05: 안전 대응 문구는 사전에 검토된 고정 문구를 사용할 수 있어야 한다.
 const SAFE_FALLBACK_LINE = "(친구가 잠시 멈칫한다) 음... 나 잠깐 다른 얘기 하고 싶어. 다시 물어봐 줄래?";
 
+// 마스코트(도우미 강아지)의 개입 문구 — 화자를 캐릭터와 분리해서 짧게 제지·환기만 하고,
+// 캐릭터의 반응은 그대로 이어서 생성한다(마스코트가 캐릭터를 대신하지 않음).
+const MASCOT_PROFANITY_LINE = "(마스코트가 옆에서 살짝 끼어든다) 얘들아, 그런 말은 마음을 아프게 할 수 있어~";
+const MASCOT_OFF_TOPIC_LINE = "(마스코트가 톡톡 건드린다) 잠깐! 지금은 다른 이야기 중이었지? 다시 돌아가 볼까?";
+
 function buildGenerationSystemPrompt(scenario: Scenario, persona: Persona): string {
   return `너는 역할극 캐릭터 "${persona.name}"이다.
 성격: ${persona.personality}
@@ -166,8 +171,10 @@ function buildInputSafetyJudgePrompt(scenario: Scenario): string {
 - RISK: 자신이든 남이든 죽음·자해·신체적 해악을 스스로 "바라거나 가하겠다"는 의도가 담긴 표현만 해당
   (예: "죽고 싶어", "죽어버려", "때릴 거야"). 대상이 나 자신인지 상대방인지는 분류에 영향을 주지 않는다.
   단순히 상대가 이미 다쳤는지 묻거나 걱정하는 말은 RISK가 아니다 — 반드시 의도·바람이 담겨야 RISK다.
+- OFF_TOPIC: 위 시나리오 사실과 전혀 관련 없는 화제(예: 게임, 저녁 메뉴, 다른 친구 이야기 등
+  이 상황과 무관한 이야기). 시나리오 상황에 대한 질문·반응이면 OFF_TOPIC이 아니다.
 반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
-{"category": "NORMAL" | "PROFANITY" | "PII" | "RISK", "reason": "한 문장"}`;
+{"category": "NORMAL" | "PROFANITY" | "PII" | "RISK" | "OFF_TOPIC", "reason": "한 문장"}`;
 }
 
 function buildPiiMaskPrompt(): string {
@@ -177,7 +184,7 @@ function buildPiiMaskPrompt(): string {
 }
 
 interface InputSafetyOutput {
-  category?: "NORMAL" | "PROFANITY" | "PII" | "RISK";
+  category?: "NORMAL" | "PROFANITY" | "PII" | "RISK" | "OFF_TOPIC";
   reason?: string;
 }
 
@@ -375,10 +382,19 @@ async function main() {
       if (inputSafety.category === "RISK") {
         // SAFE-04 / SAFETY_ESCALATION 재현: 일반 역할극보다 보호 절차를 우선한다.
         // 이 발화는 역할극 transcript에 포함하지 않는다 (SAFE-06: 안전 사건은 일반 학습 기록과 분리).
+        // 화자는 마스코트다 — 캐릭터(친구)가 아니라 도우미 강아지가 개입하는 상황.
         console.log(
-          `친구> (마스코트가 다가온다) 잠깐, 지금 이야기는 선생님이나 어른한테 꼭 알려야 할 것 같아. 잠시 여기서 멈출게.`,
+          `마스코트> 잠깐, 지금 이야기는 선생님이나 어른한테 꼭 알려야 할 것 같아. 잠시 여기서 멈출게.`,
         );
         continue;
+      }
+
+      // 욕설·주제 이탈은 역할극을 중단하지 않되(SAFE-03), 캐릭터가 아니라 마스코트가
+      // 짧게 제지·환기만 하고 빠진다 — 캐릭터의 반응은 이어서 그대로 생성된다.
+      if (inputSafety.category === "PROFANITY") {
+        console.log(`마스코트> ${MASCOT_PROFANITY_LINE}`);
+      } else if (inputSafety.category === "OFF_TOPIC") {
+        console.log(`마스코트> ${MASCOT_OFF_TOPIC_LINE}`);
       }
 
       let contentForTranscript = trimmed;
@@ -397,6 +413,12 @@ async function main() {
         inputSafety.category === "PROFANITY"
           ? `\n\n[안전 지침] 아이가 방금 욕설을 썼다. 그 말을 그대로 맞받아치거나 따라 하지 말고, 아이가 느끼는 답답함이나 화남을 캐릭터로서 안전한 말로 표현하도록 부드럽게 도와줘.`
           : "";
+      // 주제 이탈도 역할극을 중단하지 않고(마스코트가 이미 환기했으니), 캐릭터는 발화를
+      // 짧게 수용한 뒤 시나리오로 자연스럽게 복귀한다.
+      const offTopicRedirectHint =
+        inputSafety.category === "OFF_TOPIC"
+          ? `\n\n[안전 지침] 아이가 지금 상황과 관계없는 이야기를 했다. 그 말을 짧게 받아준 뒤, 자연스럽게 지금 상황으로 다시 돌아오는 대사를 해라.`
+          : "";
 
       // GEN-02 재현: 이번 턴 시작 시점 기준으로 아직 안 끝난 목표가 있으면 그중 하나를
       // 목표로 삼아 자연스럽게 유도하라고 생성 단계에 알려준다 — 정답을 직접 말해주면 안 됨.
@@ -409,7 +431,7 @@ async function main() {
 정답을 직접 말해주지 말고, 아이가 스스로 이 부분을 말하도록 자연스럽게 유도하는 방향으로 반응하거나 되물어라.`
         : `\n\n[학습 목표 지침] 목표를 다 확인했다. 자연스럽게 마무리하는 방향으로 반응하라.`;
 
-      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}${goalTargetingHint}`;
+      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}${offTopicRedirectHint}${goalTargetingHint}`;
 
       // 마이크로 목표 스캔은 대사 생성과 서로 결과가 필요 없으니 동시에 돌린다 —
       // "몰래" 판정한다는 §5 취지에도 맞고(자연스러운 대화 흐름을 막지 않음), 병렬이라 시간도 거의 안 더해진다.
