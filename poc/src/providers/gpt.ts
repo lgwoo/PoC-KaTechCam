@@ -1,11 +1,13 @@
-import OpenAI from "openai";
-import type { CompletionInput, CompletionResult, Provider } from "./types.js";
-
-const MAX_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 1024);
+import { buildOpenAiCompatibleProvider } from "./openaiCompatible.js";
+import type { Provider } from "./types.js";
 
 export function buildGptProvider(): Provider {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL;
+  // 공식 OpenAI가 아닌 제3자 브릿지(예: Timely GPT SDK)를 거치는 옵션.
+  // 설정 시 latency 결과에 반드시 "브릿지 경유"로 표시해야 한다 — 직접 API 기준(PERF-01~03)과
+  // 비교 불가능한 수치가 되기 때문. 실제 서비스/실제 아동 데이터에는 사용 금지, PoC 테스트 전용.
+  const baseURL = process.env.OPENAI_BASE_URL;
 
   if (!apiKey) {
     return unavailable("OPENAI_API_KEY 미설정");
@@ -16,27 +18,8 @@ export function buildGptProvider(): Provider {
     );
   }
 
-  const client = new OpenAI({ apiKey });
-
-  return {
-    id: "gpt",
-    label: `GPT (${model})`,
-    available: true,
-    async complete({ system, user }: CompletionInput): Promise<CompletionResult> {
-      const start = Date.now();
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: MAX_TOKENS,
-        messages: [
-          ...(system ? [{ role: "system" as const, content: system }] : []),
-          { role: "user" as const, content: user },
-        ],
-      });
-      const latencyMs = Date.now() - start;
-      const text = response.choices[0]?.message?.content ?? "";
-      return { text, latencyMs };
-    },
-  };
+  const label = baseURL ? `GPT (${model}, 브릿지 경유: ${baseURL})` : `GPT (${model})`;
+  return buildOpenAiCompatibleProvider({ id: "gpt", label, apiKey, model, baseURL });
 }
 
 function unavailable(reason: string): Provider {

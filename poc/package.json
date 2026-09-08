@@ -6,7 +6,8 @@
   "description": "느링고 아키텍처 리스크 검증용 독립 PoC 테스트 하네스 (GPT/Gemini/Claude + OpenAI Moderation)",
   "scripts": {
     "test:all": "tsx src/runner.ts",
-    "test": "tsx src/runner.ts"
+    "test": "tsx src/runner.ts",
+    "chat": "tsx src/chat.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

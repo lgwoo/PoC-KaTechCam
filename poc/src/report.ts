@@ -2,13 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TestResult } from "./tests/types.js";
 
+const MAX_CELL_LENGTH = 300;
+
+function sanitizeCell(value: unknown): string {
+  const text = String(value ?? "");
+  const collapsed = text.replace(/\r?\n/g, " ¶ ").replace(/\|/g, "\\|");
+  return collapsed.length > MAX_CELL_LENGTH ? `${collapsed.slice(0, MAX_CELL_LENGTH)}…` : collapsed;
+}
+
 function toMarkdownTable(rows: TestResult["rows"]): string {
   if (rows.length === 0) return "_결과 없음_";
-  const columns = Object.keys(rows[0]);
+  // rows마다 필드 구성이 다를 수 있으므로(예: SKIPPED 행 vs 정상 결과 행) 전체 행의 키 합집합을 컬럼으로 쓴다.
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
   const header = `| ${columns.join(" | ")} |`;
   const divider = `| ${columns.map(() => "---").join(" | ")} |`;
   const body = rows
-    .map((row) => `| ${columns.map((col) => String(row[col] ?? "")).join(" | ")} |`)
+    .map((row) => `| ${columns.map((col) => sanitizeCell(row[col])).join(" | ")} |`)
     .join("\n");
   return [header, divider, body].join("\n");
 }

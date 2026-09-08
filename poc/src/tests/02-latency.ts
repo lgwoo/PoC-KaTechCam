@@ -24,6 +24,19 @@ export async function run(registry: Registry): Promise<TestResult> {
   const notes: string[] = [
     `provider별 ${SAMPLES}회 반복 측정. PERF-03 목표치(생성 단계 p95 ${PERF_03_TARGET_MS}ms) 대조 참고용 — STT/TTS는 제외한 LLM 2단계만 측정.`,
   ];
+  const bridgeEnvVars: [string, string][] = [
+    ["GPT", "OPENAI_BASE_URL"],
+    ["Gemini", "GEMINI_BASE_URL"],
+    ["Claude", "CLAUDE_BASE_URL"],
+  ];
+  for (const [providerName, envVar] of bridgeEnvVars) {
+    const bridgeUrl = process.env[envVar];
+    if (bridgeUrl) {
+      notes.push(
+        `⚠️ ${providerName}는 제3자 브릿지(${bridgeUrl}) 경유 — 이 provider의 latency는 브릿지 오버헤드 포함, 직접 API 기준(PERF-01~03)과 비교 불가.`,
+      );
+    }
+  }
 
   for (const provider of registry.providers) {
     if (!provider.available) {
