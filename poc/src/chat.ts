@@ -30,6 +30,9 @@ const SAFE_FALLBACK_LINE = "(친구가 잠시 멈칫한다) 음... 나 잠깐 �
 // 캐릭터의 반응은 그대로 이어서 생성한다(마스코트가 캐릭터를 대신하지 않음).
 const MASCOT_PROFANITY_LINE = "(마스코트가 옆에서 살짝 끼어든다) 얘들아, 그런 말은 마음을 아프게 할 수 있어~";
 const MASCOT_OFF_TOPIC_LINE = "(마스코트가 톡톡 건드린다) 잠깐! 지금은 다른 이야기 중이었지? 다시 돌아가 볼까?";
+// HIGH 등급(Moderation이 구체적 위협·그래픽 폭력 등으로 잡은 경우) — PROFANITY보다 더
+// 분명하게 개입한다. RISK(역할극 중단)까지는 아니고, 역할극은 이어가되 확실히 짚고 넘어간다.
+const MASCOT_HIGH_CONCERN_LINE = "(마스코트가 앞으로 나선다) 잠깐, 그런 표현은 안 돼. 서로 다치게 하는 말은 하지 말자, 알겠지?";
 
 function buildGenerationSystemPrompt(scenario: Scenario, persona: Persona): string {
   return `너는 역할극 캐릭터 "${persona.name}"이다.
@@ -228,11 +231,17 @@ async function checkChildInputSafety(
   }
 
   const moderatedOk = moderationResult?.ok === true ? moderationResult.value : null;
+  const severity = moderatedOk ? moderationSeverity(moderatedOk.categories) : "NONE";
   // CRITICAL(자해/아동성적 등)은 우리 자체 분류기가 뭐라 판정했든 무조건 RISK로 강제한다 —
   // defense-in-depth: 한쪽이 놓쳐도 다른 쪽이 잡도록 하는 이중 안전망.
-  if (moderatedOk && moderationSeverity(moderatedOk.categories) === "CRITICAL" && category !== "RISK") {
-    reason = `Moderation이 CRITICAL(${moderatedOk.categories.join(", ")})로 판정 — 자체 분류(${category})보다 우선하여 RISK로 강제`;
+  if (severity === "CRITICAL" && category !== "RISK") {
+    reason = `Moderation이 CRITICAL(${moderatedOk!.categories.join(", ")})로 판정 — 자체 분류(${category})보다 우선하여 RISK로 강제`;
     category = "RISK";
+  } else if (severity === "HIGH" && category !== "RISK" && category !== "HIGH_CONCERN") {
+    // HIGH(구체적 위협·그래픽 폭력 등)는 역할극을 완전히 멈추진 않되(RISK만큼은 아님),
+    // 마스코트가 개입해야 하는 수준으로 격상한다 — 자체 분류기가 PROFANITY/NORMAL로 봤어도 덮어씀.
+    reason = `Moderation이 HIGH(${moderatedOk!.categories.join(", ")})로 판정 — 자체 분류(${category})보다 우선하여 HIGH_CONCERN으로 격상`;
+    category = "HIGH_CONCERN";
   }
 
   const moderationFlagged = !moderationResult ? null : moderationResult.ok ? moderationResult.value.flagged : null;
@@ -406,12 +415,14 @@ async function main() {
         continue;
       }
 
-      // 욕설·주제 이탈은 역할극을 중단하지 않되(SAFE-03), 캐릭터가 아니라 마스코트가
-      // 짧게 제지·환기만 하고 빠진다 — 캐릭터의 반응은 이어서 그대로 생성된다.
+      // 욕설·주제 이탈·HIGH 수준 우려는 역할극을 중단하지 않되(SAFE-03), 캐릭터가 아니라
+      // 마스코트가 짧게 제지·환기만 하고 빠진다 — 캐릭터의 반응은 이어서 그대로 생성된다.
       if (inputSafety.category === "PROFANITY") {
         console.log(`마스코트> ${MASCOT_PROFANITY_LINE}`);
       } else if (inputSafety.category === "OFF_TOPIC") {
         console.log(`마스코트> ${MASCOT_OFF_TOPIC_LINE}`);
+      } else if (inputSafety.category === "HIGH_CONCERN") {
+        console.log(`마스코트> ${MASCOT_HIGH_CONCERN_LINE}`);
       }
 
       let contentForTranscript = trimmed;
@@ -436,6 +447,12 @@ async function main() {
         inputSafety.category === "OFF_TOPIC"
           ? `\n\n[안전 지침] 아이가 지금 상황과 관계없는 이야기를 했다. 그 말을 짧게 받아준 뒤, 자연스럽게 지금 상황으로 다시 돌아오는 대사를 해라.`
           : "";
+      // HIGH_CONCERN: 마스코트가 이미 확실히 짚었으니, 캐릭터는 그 표현을 절대 따라 하거나
+      // 되풀이하지 않고 안전하게 진정하는 방향으로만 반응한다.
+      const highConcernHint =
+        inputSafety.category === "HIGH_CONCERN"
+          ? `\n\n[안전 지침] 아이가 방금 심각한 표현을 썼다(마스코트가 이미 제지했다). 그 표현을 절대 반복하거나 언급하지 말고, 캐릭터가 진정하며 안전하게 반응하는 짧은 대사만 만들어라.`
+          : "";
 
       // GEN-02 재현: 이번 턴 시작 시점 기준으로 아직 안 끝난 목표가 있으면 그중 하나를
       // 목표로 삼아 자연스럽게 유도하라고 생성 단계에 알려준다 — 정답을 직접 말해주면 안 됨.
@@ -448,7 +465,7 @@ async function main() {
 정답을 직접 말해주지 말고, 아이가 스스로 이 부분을 말하도록 자연스럽게 유도하는 방향으로 반응하거나 되물어라.`
         : `\n\n[학습 목표 지침] 목표를 다 확인했다. 자연스럽게 마무리하는 방향으로 반응하라.`;
 
-      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}${offTopicRedirectHint}${goalTargetingHint}`;
+      const userInput = `${historyText}\n\n위 대화에서 "친구"의 다음 대사를 만들어라.${profanityCoachingHint}${offTopicRedirectHint}${highConcernHint}${goalTargetingHint}`;
 
       // 마이크로 목표 스캔은 대사 생성과 서로 결과가 필요 없으니 동시에 돌린다 —
       // "몰래" 판정한다는 §5 취지에도 맞고(자연스러운 대화 흐름을 막지 않음), 병렬이라 시간도 거의 안 더해진다.
