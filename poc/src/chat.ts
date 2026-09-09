@@ -165,9 +165,10 @@ async function generateApprovedReply(
 // SAFE-02는 자해·타해를 같은 위험 신호로 묶어서 다룬다 — 자신을 향한 것이든("죽고 싶어")
 // 남을 향한 것이든("죽어버려") 죽음·신체적 해악을 언급하면 동일하게 RISK로 escalate한다.
 // 대상이 자신인지 남인지에 따라 심각도를 다르게 보지 않는다(둘 다 즉시 보호 절차 우선).
-function buildInputSafetyJudgePrompt(scenario: Scenario): string {
+function buildInputSafetyJudgePrompt(scenario: Scenario, recentHistory: string): string {
   return `너는 느링고의 입력 안전 판단자다. 아동이 방금 입력한 문장 하나를 분류하라. 아래 카테고리 중 하나만 골라야 한다.
 이 역할극의 시나리오 사실: ${scenario.scenarioFacts.join(" ")}
+${recentHistory ? `지금까지의 대화 맥락(참고용, 판단 대상 아님):\n${recentHistory}\n` : ""}
 - NORMAL: 안전한 일반 발화. 위 시나리오 상황에 자연스럽게 나올 수 있는 걱정·관찰·질문
   (예: 상대의 상태를 묻거나 걱정하는 말)은 항상 NORMAL이다 — 죽음이나 폭력을 바라는 의도가 없는 한 그렇다.
 - PROFANITY: 단순 욕설·비하 표현(예: "바보", "멍청이")이지만 죽음이나 신체적 해악을 바라지 않음
@@ -175,8 +176,13 @@ function buildInputSafetyJudgePrompt(scenario: Scenario): string {
 - RISK: 자신이든 남이든 죽음·자해·신체적 해악을 스스로 "바라거나 가하겠다"는 의도가 담긴 표현만 해당
   (예: "죽고 싶어", "죽어버려", "때릴 거야"). 대상이 나 자신인지 상대방인지는 분류에 영향을 주지 않는다.
   단순히 상대가 이미 다쳤는지 묻거나 걱정하는 말은 RISK가 아니다 — 반드시 의도·바람이 담겨야 RISK다.
-- OFF_TOPIC: 위 시나리오 사실과 전혀 관련 없는 화제(예: 게임, 저녁 메뉴, 다른 친구 이야기 등
-  이 상황과 무관한 이야기). 시나리오 상황에 대한 질문·반응이면 OFF_TOPIC이 아니다.
+- OFF_TOPIC: 새로운 무관한 화제를 스스로 꺼낸 경우만 해당한다(예: "오늘 저녁 뭐 먹지?", "나 어제
+  게임했어" 처럼 지금 대화랑 아예 상관없는 말을 아이가 먼저 시작한 경우). OFF_TOPIC은 예외적인
+  경우고, 헷갈리면 기본값은 NORMAL이다.
+  짧은 대명사·지시어·되물음("그거 말고는?", "또 있어?", "왜?", "정말?", "그게 뭔데?")은 정의상
+  직전 대화를 가리키는 말이다 — 이런 말은 그 자체로 화제가 없어 보여도 절대 OFF_TOPIC으로
+  분류하지 마라. 무조건 NORMAL이다. 예: 맥락이 "친구: 나도 단짝 생각나서 미안해" 다음에 아이가
+  "그거 말고 또 있어?"라고 하면, 이건 "미안한 이유가 더 있어?"라는 뜻이므로 NORMAL이다.
 반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
 {"category": "NORMAL" | "PROFANITY" | "PII" | "RISK" | "OFF_TOPIC", "reason": "한 문장"}`;
 }
@@ -212,12 +218,15 @@ async function checkChildInputSafety(
   provider: Provider,
   moderation: ModerationClient,
   scenario: Scenario,
+  recentHistory: string,
   text: string,
 ): Promise<InputSafetyResult> {
   // Moderation과 LLM 판단은 서로 결과를 필요로 하지 않으니 순차 대기하지 않고 동시에 호출한다.
   const [moderationResult, judgeResult] = await Promise.all([
     moderation.available ? safeCall(() => moderation.moderate(text)) : Promise.resolve(null),
-    safeCall(() => provider.complete({ system: buildInputSafetyJudgePrompt(scenario), user: text })),
+    safeCall(() =>
+      provider.complete({ system: buildInputSafetyJudgePrompt(scenario, recentHistory), user: text }),
+    ),
   ]);
 
   let category = "PARSE_ERROR";
@@ -427,7 +436,16 @@ async function main() {
       // 전체 턴 시간: 아동 입력 안전검사부터 최종 전달까지 실제 체감 왕복시간 전부 포함.
       const turnStart = Date.now();
 
-      const inputSafety = await checkChildInputSafety(provider, registry.moderation, activeScenario, trimmed);
+      // OFF_TOPIC 등은 문맥 없이 그 한 줄만 보면 애매하다("또 있어?" 같은 짧은 후속 질문) —
+      // 이 시점의 transcript는 아직 이번 아이 발화를 안 넣은 "직전까지의 대화"라 그대로 넘긴다.
+      const recentHistoryForCheck = transcript.map((t) => `${t.speaker}: ${t.text}`).join("\n");
+      const inputSafety = await checkChildInputSafety(
+        provider,
+        registry.moderation,
+        activeScenario,
+        recentHistoryForCheck,
+        trimmed,
+      );
       console.log(`  [입력 안전: ${inputSafety.category}] ${inputSafety.reason}${inputSafety.moderationDetail}`);
 
       if (inputSafety.category === "RISK") {
