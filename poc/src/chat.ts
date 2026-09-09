@@ -541,6 +541,15 @@ async function main() {
       console.log(`친구> ${delivered.text}${delivered.fallbackUsed ? "  [기본 응답]" : ""}`);
       console.log(`  [전체 소요 ${turnMs}ms(입력 안전검사+마이크로목표 스캔 포함), 후보 ${delivered.candidateAttempts}개 생성]`);
       transcript.push({ speaker: "친구", text: delivered.text });
+
+      // SES-07 / 아동 흐름 §3.2-11 재현: 목표를 달성하면 안전한 마무리 후 스탬프 지급, 세션 종료.
+      // pendingGoals(이번 턴 시작 시점 기준)가 비어있지 않았다는 건 "이번 턴에 막 다 끝났다"는
+      // 뜻 — 이미 지난 턴에 다 끝나 있었다면(계속 대화만 하는 경우) 다시 트리거하지 않는다.
+      const allGoalsAchieved = activeScenario.microGoals.every((mg) => microGoalState.get(mg.id));
+      if (pendingGoals.length > 0 && allGoalsAchieved) {
+        console.log(`\n🏅 [세션 완료] 모든 세부목표 달성! 스탬프 1개 지급.`);
+        break;
+      }
     }
   } finally {
     rl.close();
