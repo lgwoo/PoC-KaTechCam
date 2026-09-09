@@ -44,9 +44,13 @@ function buildGenerationSystemPrompt(scenario: Scenario, persona: Persona): stri
 캐릭터로서 한두 문장만 짧게 반응하라. 설명하지 말고 대사만 출력하라.`;
 }
 
-// 12.3 판단 기준(안전성/개인정보, 시나리오 사실, 캐릭터 유지, 대화 적절성) 재현.
+// 12.3 판단 기준(안전성/개인정보, 시나리오 사실, 캐릭터 유지, 대화 적절성, 대화 흐름, 목표 정렬) 재현.
+// 기능요구사항 §16: 응답 판단 입력에는 roleplay_context, learner_turn, recent_dialogue,
+// candidate_response를 구조화해 포함해야 한다 — candidateText 하나만 보고 판정하면 안 된다.
 function buildJudgeSystemPrompt(scenario: Scenario, persona: Persona): string {
-  return `너는 느링고의 응답 판단 에이전트다. 아래 후보 대사가 아동에게 그대로 전달되어도 되는지 판정하라.
+  return `너는 느링고의 응답 판단 에이전트다. user 메시지는 JSON으로 온다:
+{"recentDialogue": string, "currentChildInput": string, "targetGoal": {description, requiredEvidence} | null, "candidateText": string}
+"candidateText"(캐릭터 후보 대사)가 아동에게 그대로 전달되어도 되는지 판정하라. 나머지 필드는 판단을 위한 맥락이다.
 시나리오 사실: ${scenario.scenarioFacts.join(" ")}
 금지 추론: ${scenario.prohibitedInferences.join(" ")}
 캐릭터 성격/말투: ${persona.personality} / ${persona.speechStyle}
@@ -55,6 +59,10 @@ function buildJudgeSystemPrompt(scenario: Scenario, persona: Persona): string {
 2. 시나리오 일치: 시나리오 사실과 모순되거나 금지 추론을 사실처럼 단정하지 않아야 한다.
 3. 캐릭터 유지: 1인칭 캐릭터 톤과 말투를 유지해야 한다 (상황을 설명하는 선생님처럼 되면 안 된다).
 4. 대화 적절성: 한 번에 하나의 생각만 담고, 지나치게 길지 않아야 한다.
+5. 대화 흐름: candidateText가 currentChildInput에 적절히 반응하는지, recentDialogue와 같은 질문을
+   반복하거나 갑자기 흐름이 끊기지 않는지 확인하라.
+6. 목표 정렬: targetGoal이 있으면 candidateText가 그 목표를 향해 자연스럽게 유도하는지(정답을
+   직접 말해버리지 않으면서) 확인하라. targetGoal이 null이면 이 기준은 건너뛴다.
 반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
 {
   "safe_to_send": boolean,
@@ -80,12 +88,19 @@ interface DeliveredReply {
   candidateAttempts: number;
 }
 
+interface JudgeContext {
+  recentDialogue: string;
+  currentChildInput: string;
+  targetGoal: MicroGoal | undefined;
+}
+
 async function generateApprovedReply(
   provider: Provider,
   moderation: ModerationClient,
   scenario: Scenario,
   persona: Persona,
   userInput: string,
+  judgeContext: JudgeContext,
 ): Promise<DeliveredReply> {
   const generationSystemPrompt = buildGenerationSystemPrompt(scenario, persona);
   const judgeSystemPrompt = buildJudgeSystemPrompt(scenario, persona);
@@ -117,9 +132,22 @@ async function generateApprovedReply(
     // SAFE-01: AI 출력도 아동 입력과 동일하게 안전 검사 대상 — LLM 판단만 믿지 않고
     // OpenAI Moderation으로 이중 확인한다 (한쪽이 놓쳐도 다른 쪽이 잡도록 하는 defense-in-depth).
     // 이 둘도 서로 독립적이라 동시에 호출한다.
+    // 판단은 candidateText 하나만 보지 않는다 — 직전 대화, 아이의 이번 발화, 이번에 겨냥한
+    // 목표까지 같이 줘야 "대화 흐름"과 "목표 정렬"을 실제로 검증할 수 있다 (§16 재현).
+    const judgeUserPayload = JSON.stringify({
+      recentDialogue: judgeContext.recentDialogue,
+      currentChildInput: judgeContext.currentChildInput,
+      targetGoal: judgeContext.targetGoal
+        ? {
+            description: judgeContext.targetGoal.description,
+            requiredEvidence: judgeContext.targetGoal.requiredEvidence,
+          }
+        : null,
+      candidateText,
+    });
     const [moderationResult, judgeResult] = await Promise.all([
       moderation.available ? safeCall(() => moderation.moderate(candidateText)) : Promise.resolve(null),
-      safeCall(() => provider.complete({ system: judgeSystemPrompt, user: candidateText })),
+      safeCall(() => provider.complete({ system: judgeSystemPrompt, user: judgeUserPayload })),
     ]);
     const moderationFlagged = moderationResult?.ok === true && moderationResult.value.flagged;
 
@@ -521,7 +549,11 @@ async function main() {
       // "몰래" 판정한다는 §5 취지에도 맞고(자연스러운 대화 흐름을 막지 않음), 병렬이라 시간도 거의 안 더해진다.
       const [microGoalScan, delivered] = await Promise.all([
         scanMicroGoals(provider, pendingGoals, historyText),
-        generateApprovedReply(provider, registry.moderation, activeScenario, activePersona, userInput),
+        generateApprovedReply(provider, registry.moderation, activeScenario, activePersona, userInput, {
+          recentDialogue: historyText,
+          currentChildInput: contentForTranscript,
+          targetGoal,
+        }),
       ]);
       const turnMs = Date.now() - turnStart;
 
