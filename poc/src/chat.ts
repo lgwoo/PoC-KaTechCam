@@ -44,7 +44,7 @@ function buildGenerationSystemPrompt(scenario: Scenario, persona: Persona): stri
 캐릭터로서 한두 문장만 짧게 반응하라. 설명하지 말고 대사만 출력하라.`;
 }
 
-// 12.3 판단 기준(안전성/개인정보, 시나리오 사실, 캐릭터 유지, 대화 적절성, 대화 흐름, 목표 정렬) 재현.
+// 12.3 판단 기준(안전성/개인정보, 시나리오 사실, 캐릭터 유지, 대화 적절성, 대화 흐름, 역할극 유지, 목표 정렬) 재현.
 // 기능요구사항 §16: 응답 판단 입력에는 roleplay_context, learner_turn, recent_dialogue,
 // candidate_response를 구조화해 포함해야 한다 — candidateText 하나만 보고 판정하면 안 된다.
 function buildJudgeSystemPrompt(scenario: Scenario, persona: Persona): string {
@@ -59,10 +59,16 @@ function buildJudgeSystemPrompt(scenario: Scenario, persona: Persona): string {
 2. 시나리오 일치: 시나리오 사실과 모순되거나 금지 추론을 사실처럼 단정하지 않아야 한다.
 3. 캐릭터 유지: 1인칭 캐릭터 톤과 말투를 유지해야 한다 (상황을 설명하는 선생님처럼 되면 안 된다).
 4. 대화 적절성: 한 번에 하나의 생각만 담고, 지나치게 길지 않아야 한다.
-5. 대화 흐름: candidateText가 currentChildInput에 적절히 반응하는지, recentDialogue와 같은 질문을
-   반복하거나 갑자기 흐름이 끊기지 않는지 확인하라.
-6. 목표 정렬: targetGoal이 있으면 candidateText가 그 목표를 향해 자연스럽게 유도하는지(정답을
-   직접 말해버리지 않으면서) 확인하라. targetGoal이 null이면 이 기준은 건너뛴다.
+5. 대화 흐름: candidateText가 currentChildInput에 자연스럽게 반응하는지 확인하라.
+   recentDialogue에서 아이가 이미 답한 내용을 불필요하게 다시 묻지 않는지, 표현만 바꿔서
+   같은 질문을 반복하지 않는지 확인하라 — 단, 아이가 재설명을 요청한 경우(예: "무슨 말이야?",
+   "다시 말해줘")는 같은 취지의 질문을 다시 해도 괜찮다.
+6. 역할극 유지: 학습 목표를 유도하는 중이어도 아이의 질문을 무시하거나, 캐릭터가 선생님처럼
+   아이를 시험하는 태도로 바뀌지 않는지 확인하라. 아이가 뭔가 물어봤으면 그 질문에 먼저
+   반응해야 한다.
+7. 목표 정렬: targetGoal이 있으면 candidateText가 그 목표를 향해 자연스럽게 유도하는지 확인하라.
+   단, 목표의 정답(requiredEvidence)을 candidateText가 그대로 알려주거나, 아이에게 그 표현을
+   따라 말하게 시키는 것은 금지한다 — 유도이지 정답 주입이나 앵무새 따라하기가 아니다.
 반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
 {
   "safe_to_send": boolean,
