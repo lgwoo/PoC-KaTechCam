@@ -404,7 +404,14 @@ async function main() {
   console.log(`캐릭터: ${activePersona.name} (${activePersona.personality})`);
   console.log(`시작 상황: ${activeScenario.scenarioFacts.join(" ")}`);
   console.log(`생성 → 판단 에이전트(PASS만 전달, 안전 문제는 재생성/기본응답) 흐름 재현.`);
-  console.log(`"exit" 또는 "quit" 입력하면 종료.\n`);
+  console.log(`"exit" 또는 "quit" 입력하면 종료.`);
+  // 테스트 편의용 — 실제 서비스에서는 아이한테 세부목표를 절대 노출하면 안 된다(정답을 미리
+  // 알려주는 꼴). 여기서는 우리가 뭘 유도해야 할지 알고 대화하려고 테스터한테만 미리 보여준다.
+  console.log(`\n[테스트용 참고 — 실제 아이 화면엔 노출 안 됨] 세부목표:`);
+  for (const mg of activeScenario.microGoals) {
+    console.log(`  ${mg.id}: ${mg.description} (증거: ${mg.requiredEvidence.join(", ")})`);
+  }
+  console.log("");
 
   const transcript: { speaker: "아이" | "친구"; text: string }[] = [];
   const microGoalState = new Map(activeScenario.microGoals.map((mg) => [mg.id, false]));
