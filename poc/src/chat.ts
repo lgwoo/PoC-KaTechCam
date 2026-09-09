@@ -266,14 +266,22 @@ function buildMicroGoalScanPrompt(pendingGoals: MicroGoal[]): string {
 반드시 "아이:"로 표시된 발화에서 나온 증거만 인정하라. "친구:"로 표시된 캐릭터 자신의 대사는
 아무리 정답에 가까운 내용을 말해도 증거로 인정하지 않는다 — 이건 아이가 스스로 이해했는지
 판단하는 것이지, 캐릭터가 힌트를 줬는지 판단하는 게 아니다.
+
+중요: 근거로 든 아이 발화가 "그 목표의 증거 설명"을 실제로 충족하는지 하나하나 확인하라.
+단지 아이가 그 즈음에 무슨 말을 했다는 이유만으로 아무 발화나 갖다 붙이면 안 된다.
+예를 들어 목표가 "복합 감정 인식"인데 그 아이 발화가 단순 욕설이나 무관한 질문이라면,
+그건 그 목표의 증거가 아니다 — achieved에 넣지 말고 그 목표는 빈 채로 둬라.
+확신이 없으면 넣지 않는 편을 택하라(놓치는 것이 잘못 인정하는 것보다 낫다).
 ${goalList}
 반드시 아래 JSON 형식으로만 답하라. 다른 텍스트를 덧붙이지 마라.
-{"achieved": [{"micro_goal_id": string, "evidence": string}]} (evidence에는 근거가 된 아이 발화 원문을 그대로 넣어라)
+{"achieved": [{"micro_goal_id": string, "evidence": string, "why_this_satisfies": string}]}
+(evidence에는 근거가 된 아이 발화 원문을 그대로, why_this_satisfies에는 그 발화가 왜 해당 목표의
+증거 설명을 충족하는지 한 문장으로 설명하라 — 이 설명을 스스로 못 만들면 그 항목은 넣지 마라.)
 증거가 아직 없으면 achieved를 빈 배열로 둬라.`;
 }
 
 interface MicroGoalScanOutput {
-  achieved?: { micro_goal_id?: string; evidence?: string }[];
+  achieved?: { micro_goal_id?: string; evidence?: string; why_this_satisfies?: string }[];
 }
 
 async function scanMicroGoals(
@@ -295,10 +303,27 @@ async function scanMicroGoals(
   const parsed = tryParseJson<MicroGoalScanOutput>(result.value.text);
   const evidenceById = new Map<string, string>();
   const achievedIds: string[] = [];
+  // 결정적 검증: LLM이 화자 규칙을 프롬프트에서만 지키게 두지 않고, 근거 문자열이 실제로
+  // "아이:" 발화에 존재하는지 코드로 다시 확인한다 — 프롬프트 지시만으로는 안 지켜질 수 있다
+  // (실측: why_this_satisfies 설명을 추가했더니 "친구:" 대사를 근거로 드는 회귀가 발생했었다).
+  const childLines = fullHistoryText
+    .split("\n")
+    .filter((line) => line.startsWith("아이:"))
+    .map((line) => line.slice("아이:".length).trim());
+
   for (const item of parsed?.achieved ?? []) {
-    if (item.micro_goal_id && pendingGoals.some((g) => g.id === item.micro_goal_id)) {
+    const evidence = item.evidence?.trim() ?? "";
+    const evidenceFromChild = childLines.some(
+      (line) => line.length > 0 && (evidence.includes(line) || line.includes(evidence)),
+    );
+    if (
+      item.micro_goal_id &&
+      pendingGoals.some((g) => g.id === item.micro_goal_id) &&
+      item.why_this_satisfies?.trim() &&
+      evidenceFromChild
+    ) {
       achievedIds.push(item.micro_goal_id);
-      evidenceById.set(item.micro_goal_id, item.evidence ?? "");
+      evidenceById.set(item.micro_goal_id, `${item.evidence ?? ""} — ${item.why_this_satisfies}`);
     }
   }
   return { achievedIds, evidenceById, latencyMs };
