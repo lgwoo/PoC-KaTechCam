@@ -1,5 +1,6 @@
 import { buildClaudeProvider } from "./claude.js";
 import { buildGeminiProvider } from "./gemini.js";
+import { buildGpt41MiniProvider } from "./gpt41mini.js";
 import { buildGptProvider } from "./gpt.js";
 import { buildLunaProvider } from "./luna.js";
 import { buildMiniProvider } from "./mini.js";
@@ -20,6 +21,7 @@ export function buildRegistry(): Registry {
     buildLunaProvider(),
     buildNanoProvider(),
     buildMiniProvider(),
+    buildGpt41MiniProvider(),
   ];
   const moderation = buildModerationClient();
   return { providers, moderation };
