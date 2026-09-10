@@ -1,4 +1,4 @@
-export type ProviderId = "gpt" | "gemini" | "claude" | "luna";
+export type ProviderId = "gpt" | "gemini" | "claude" | "luna" | "nano";
 
 export interface CompletionInput {
   system?: string;

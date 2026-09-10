@@ -3,6 +3,7 @@ import { buildGeminiProvider } from "./gemini.js";
 import { buildGptProvider } from "./gpt.js";
 import { buildLunaProvider } from "./luna.js";
 import { buildModerationClient } from "./moderation.js";
+import { buildNanoProvider } from "./nano.js";
 import type { ModerationClient, Provider } from "./types.js";
 
 export interface Registry {
@@ -11,7 +12,13 @@ export interface Registry {
 }
 
 export function buildRegistry(): Registry {
-  const providers = [buildGptProvider(), buildGeminiProvider(), buildClaudeProvider(), buildLunaProvider()];
+  const providers = [
+    buildGptProvider(),
+    buildGeminiProvider(),
+    buildClaudeProvider(),
+    buildLunaProvider(),
+    buildNanoProvider(),
+  ];
   const moderation = buildModerationClient();
   return { providers, moderation };
 }
