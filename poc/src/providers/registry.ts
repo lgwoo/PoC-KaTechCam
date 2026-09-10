@@ -2,6 +2,7 @@ import { buildClaudeProvider } from "./claude.js";
 import { buildGeminiProvider } from "./gemini.js";
 import { buildGptProvider } from "./gpt.js";
 import { buildLunaProvider } from "./luna.js";
+import { buildMiniProvider } from "./mini.js";
 import { buildModerationClient } from "./moderation.js";
 import { buildNanoProvider } from "./nano.js";
 import type { ModerationClient, Provider } from "./types.js";
@@ -18,6 +19,7 @@ export function buildRegistry(): Registry {
     buildClaudeProvider(),
     buildLunaProvider(),
     buildNanoProvider(),
+    buildMiniProvider(),
   ];
   const moderation = buildModerationClient();
   return { providers, moderation };
