@@ -9,6 +9,8 @@ interface BuildOpenAiCompatibleOptions {
   apiKey: string;
   model: string;
   baseURL?: string;
+  /** 최신 reasoning 계열 모델(예: gpt-5.6-luna)은 max_tokens 대신 이걸 요구한다. 기본 max_tokens. */
+  maxTokensParam?: "max_tokens" | "max_completion_tokens";
 }
 
 /**
@@ -23,6 +25,7 @@ export function buildOpenAiCompatibleProvider({
   apiKey,
   model,
   baseURL,
+  maxTokensParam = "max_tokens",
 }: BuildOpenAiCompatibleOptions): Provider {
   const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
 
@@ -34,12 +37,12 @@ export function buildOpenAiCompatibleProvider({
       const start = Date.now();
       const response = await client.chat.completions.create({
         model,
-        max_tokens: MAX_TOKENS,
+        [maxTokensParam]: MAX_TOKENS,
         messages: [
           ...(system ? [{ role: "system" as const, content: system }] : []),
           { role: "user" as const, content: user },
         ],
-      });
+      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
       const latencyMs = Date.now() - start;
       const text = response.choices[0]?.message?.content ?? "";
       return { text, latencyMs };

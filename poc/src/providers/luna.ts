@@ -16,7 +16,16 @@ export function buildLunaProvider(): Provider {
     return unavailable("LUNA_BASE_URL 미설정 — Elice MLAPI 엔드포인트(예: https://.../v1)를 넣을 것");
   }
 
-  return buildOpenAiCompatibleProvider({ id: "luna", label: `Luna (${model})`, apiKey, model, baseURL });
+  // gpt-5.6-luna는 최신 reasoning 계열이라 구형 max_tokens 대신 max_completion_tokens를 요구한다
+  // (실측: max_tokens 보내면 400 Unsupported parameter 에러).
+  return buildOpenAiCompatibleProvider({
+    id: "luna",
+    label: `Luna (${model})`,
+    apiKey,
+    model,
+    baseURL,
+    maxTokensParam: "max_completion_tokens",
+  });
 }
 
 function unavailable(reason: string): Provider {
