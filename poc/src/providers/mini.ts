@@ -18,7 +18,7 @@ export function buildMiniProvider(): Provider {
 
   // Luna/Nano와 같은 계열로 추정 — max_tokens 대신 max_completion_tokens 요구할 가능성이 높음.
   return buildOpenAiCompatibleProvider({
-    id: "mini",
+    id: "gpt54mini",
     label: `Mini (${model})`,
     apiKey,
     model,
@@ -29,7 +29,7 @@ export function buildMiniProvider(): Provider {
 
 function unavailable(reason: string): Provider {
   return {
-    id: "mini",
+    id: "gpt54mini",
     label: "Mini",
     available: false,
     unavailableReason: reason,
