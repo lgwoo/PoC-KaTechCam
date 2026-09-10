@@ -40,15 +40,6 @@ SAFE_FALLBACK_LINE = "(친구가 잠시 멈칫한다) 음... 나 잠깐 다른 �
 # 마스코트를 흉내 냈다. 프롬프트로도 막지만 결정적으로 한 번 더 벗겨낸다.
 _SPEAKER_PREFIX = re.compile(r"^\s*(마스코트|친구|아이|캐릭터|assistant)\s*[:：]\s*")
 
-# 마스코트가 유도를 맡은 턴에 캐릭터까지 물으면 한 턴에 질문이 두 개가 되어 아이가
-# 무엇에 답할지 모른다. 판정 에이전트도 이걸 잡지만(CHARACTER_STEERS_ANYWAY) 그건
-# 확률이다 — 실측에서 프롬프트를 두 번 조여도 6건에서 4건까지만 줄었다.
-# 물음표는 결정적으로 볼 수 있으니 판정 왕복(p50 4.3초) 전에 거른다.
-#
-# 물음표만 본다. referee._STEERING 같은 느슨한 패턴을 쓰면 "그랬으니까" 처럼 평범한
-# 서술을 질문으로 잡아 후보 예산을 태운다 — 여기서는 거짓 양성이 곧 기본 응답이다.
-_QUESTION_MARK = re.compile(r"[?？]")
-
 
 def strip_speaker_prefix(text: str) -> str:
     previous = None
@@ -205,17 +196,6 @@ async def generate_approved_reply(
         if mascot_mode is not MascotMode.NONE and not mascot_text:
             record.outcome = "MASCOT_MISSING"
             revision_note = "mascot_line 을 반드시 채워라 — 이번 턴은 마스코트가 나서야 한다."
-            continue
-
-        # 이번 턴 질문은 마스코트가 맡았는데 캐릭터도 물었다. 판정에 보내기 전에 되돌린다.
-        # 마지막 시도는 막지 않는다 — 질문이 두 개인 대사라도 사전 승인된 고정 문구보다는
-        # 낫다는 판단이고, 심판이 마지막 시도를 막지 않는 것과 같은 이유다.
-        if not goal_hint_enabled and not is_last and _QUESTION_MARK.search(candidate_text):
-            record.outcome = "CHARACTER_STEERS"
-            revision_note = (
-                "캐릭터 대사에서 질문을 빼라 — 이번 턴 질문은 마스코트가 맡는다. "
-                "물음표 없이 아이의 말에 짧게 반응만 해라."
-            )
             continue
 
         # AI 출력도 아동 입력과 같은 안전 검사 대상이다(SAFE-01).

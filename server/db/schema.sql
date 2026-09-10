@@ -133,8 +133,7 @@ CREATE TABLE IF NOT EXISTS TURN_CANDIDATE (
     text                 TEXT NOT NULL,
     outcome              TEXT NOT NULL,                -- PASS|REGENERATE|SAFETY_REGENERATE|
                                                        -- REFEREE_BLOCKED|JUDGE_ERROR|EMPTY|ERROR|
-                                                       -- MASCOT_MISSING|MASCOT_ANSWER_LEAK|
-                                                       -- CHARACTER_STEERS
+                                                       -- MASCOT_MISSING|MASCOT_ANSWER_LEAK
     delivered            INTEGER NOT NULL DEFAULT 0,
     judge_safe_to_send   INTEGER,
     judge_decision       TEXT,
