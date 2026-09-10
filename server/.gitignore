@@ -1,0 +1,18 @@
+.env
+*.db
+# 예외 하나: Docker 첫 실행 때 빈 화면이 아니게 하려고 넣는 씨드다. 안에 든 아동
+# 발화는 전부 테스트용으로 지어낸 문장이다. 실제 대화가 쌓인 DB 는 위 규칙에 계속 걸린다.
+!seed/*.seed.db
+*.db-journal
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# 아동 발화가 그대로 들어가는 산출물 — DB 와 같은 취급을 한다.
+# 루트 .gitignore 가 *.db 로 막아 둔 것을 마크다운·JSONL 이 빠져나가면 안 된다.
+session_report.md
+runs/*
+!runs/.gitkeep

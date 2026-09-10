@@ -1,1 +1,26 @@
 개인 페이지 & 공유된 페이지/
+
+# 자격증명과 아동 발화가 담긴 DB는 어느 하위 디렉터리에 있든 커밋 금지
+.env
+*.db
+# 예외 하나: Docker 로 처음 띄웠을 때 빈 화면이 아니게 하려고 넣는 씨드다.
+# 안에 든 아동 발화는 전부 테스트용으로 지어낸 문장이고 실제 아동 데이터가 아니다.
+# 실제 대화가 쌓인 DB 는 위 *.db 규칙에 계속 걸린다 — 이 한 경로만 열어 둔다.
+!server/seed/*.seed.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+node_modules/
+dist/
+
+# 로컬 개발 도구 설정 — 내 머신 절대경로가 박혀 있어서 남에게는 안 맞는다.
+# 팀원은 docker compose 로 띄우면 되므로 공유할 이유도 없다.
+.claude/
+
+# TypeScript 증분 빌드 캐시
+*.tsbuildinfo

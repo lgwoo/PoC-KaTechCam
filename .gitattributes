@@ -1,0 +1,14 @@
+# 기본은 Git 이 알아서 판단한다.
+* text=auto
+
+# 셸 스크립트와 컨테이너 설정은 반드시 LF 다.
+# CRLF 로 체크아웃되면 리눅스 컨테이너에서 `#!/bin/sh\r` 이 되어
+# "no such file or directory" 로 죽는다 — 원인을 찾기 아주 어려운 실패다.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.conf          text eol=lf
+docker-compose.yml text eol=lf
+
+# 씨드 DB 는 바이너리다. 텍스트로 다루면 줄바꿈 변환이 파일을 깨뜨린다.
+*.db            binary
+*.png           binary

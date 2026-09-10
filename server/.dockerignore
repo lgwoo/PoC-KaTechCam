@@ -1,0 +1,14 @@
+# 자격증명과 아동 발화는 이미지에 넣지 않는다. 루트 .gitignore 와 같은 이유다.
+.env
+*.db
+!seed/*.seed.db
+*.db-journal
+*.db-wal
+*.db-shm
+runs/
+session_report.md
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

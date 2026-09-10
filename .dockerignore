@@ -1,0 +1,23 @@
+# 빌드 컨텍스트가 저장소 루트라서 여기서 걸러야 한다.
+# 자격증명과 아동 발화가 담긴 것은 이미지에 절대 넣지 않는다.
+.env
+*.db
+!server/seed/*.seed.db
+*.db-journal
+*.db-wal
+*.db-shm
+server/runs/
+server/session_report.md
+
+.git/
+.venv/
+server/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+web/node_modules/
+dist/
+web/dist/
+poc/node_modules/
+개인 페이지 & 공유된 페이지/
