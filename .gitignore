@@ -24,3 +24,7 @@ dist/
 
 # TypeScript 증분 빌드 캐시
 *.tsbuildinfo
+
+# DB 백업본 — *.db 규칙을 확장자 뒤 접미사로 빠져나가는 걸 막는다.
+*.db.bak*
+*.db-bak*

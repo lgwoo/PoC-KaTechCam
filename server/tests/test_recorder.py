@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm.client import LlmClient, StageRecorder, _unwrap_envelope, _validate
+from llm.client import CallResult, LlmClient, StageRecorder, _unwrap_envelope, _validate
 from llm.contracts import IntakeContract, JudgeContract
 from llm.errors import LlmCallError, LlmContractError
 
@@ -130,12 +130,21 @@ class _ScriptedClient(LlmClient):
         self._replies = list(replies)
         self.call_count = 0
 
-    async def _call(self, *, system: str, user: str, json_mode: bool) -> str:
+    async def _call(self, *, system: str, user: str, json_mode: bool) -> CallResult:
         self.call_count += 1
         item = self._replies.pop(0)
         if isinstance(item, BaseException):
             raise item
-        return str(item)
+        text = str(item)
+        return CallResult(
+            text=text,
+            prompt_tokens=len(system) + len(user),
+            completion_tokens=len(text),
+            total_tokens=len(system) + len(user) + len(text),
+            finish_reason="stop",
+            response_model="m-served",
+            request_chars=len(system) + len(user),
+        )
 
 
 GOOD = '{"category": "NORMAL", "reason": "ok"}'
@@ -257,3 +266,69 @@ async def test_attempt_no_is_carried_into_the_span() -> None:
     )
 
     assert recorder.timings[0].attempt_no == 3
+
+
+# ------------------------------------------------------------- 토큰 계측
+
+
+async def test_usage_lands_on_the_timing_row() -> None:
+    """토큰이 없으면 3.8초짜리 judge 가 읽느라 느린지 쓰느라 느린지 못 가른다.
+    응답의 usage 를 버리던 시절에는 속도 개선의 근거를 만들 수 없었다."""
+    client = _ScriptedClient([GOOD])
+    recorder = StageRecorder()
+
+    await client.structured(
+        stage="judge", recorder=recorder, system="시스템", user="유저",
+        contract=IntakeContract,
+    )
+
+    timing = recorder.timings[0]
+    assert timing.prompt_tokens is not None
+    assert timing.completion_tokens == len(GOOD)
+    assert timing.total_tokens == timing.prompt_tokens + timing.completion_tokens
+    assert timing.finish_reason == "stop"
+    # 설정한 모델명이 아니라 서버가 실제로 쓴 이름이 남아야 한다.
+    assert timing.response_model == "m-served"
+    assert timing.request_chars == timing.prompt_tokens
+
+
+async def test_failed_call_leaves_usage_empty_not_zero() -> None:
+    """0 토큰과 '못 쟀다'는 다르다. 0 으로 채우면 평균 토큰이 조용히 내려간다."""
+    client = _ScriptedClient([RuntimeError("boom")])
+    recorder = StageRecorder()
+
+    with pytest.raises(LlmCallError):
+        await client.structured(
+            stage="intake", recorder=recorder, system="s", user="u",
+            contract=IntakeContract,
+        )
+
+    timing = recorder.timings[0]
+    assert timing.ok is False
+    assert timing.total_tokens is None
+    assert timing.finish_reason is None
+
+
+async def test_repair_usage_is_separate_from_the_first_attempt() -> None:
+    """수리 재시도가 쓴 토큰이 본체에 합쳐지면 수리 비용이 안 보인다."""
+    client = _ScriptedClient(["{nope", GOOD])
+    recorder = StageRecorder()
+
+    await client.structured(
+        stage="intake", recorder=recorder, system="s", user="u", contract=IntakeContract
+    )
+
+    first, repair = recorder.timings
+    assert first.stage == "intake"
+    assert repair.stage == "intake.repair"
+    # 수리 프롬프트는 원문과 오류를 덧붙이므로 반드시 더 길다.
+    assert repair.request_chars > first.request_chars
+
+
+def test_span_without_a_call_records_no_tokens() -> None:
+    """Moderation 처럼 usage 가 없는 호출도 있다. 그 경우 빈 채로 남아야 한다."""
+    recorder = StageRecorder()
+    with recorder.span("moderation.input"):
+        pass
+
+    assert recorder.timings[0].total_tokens is None

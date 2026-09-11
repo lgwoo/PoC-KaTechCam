@@ -42,11 +42,40 @@ CREATE TABLE IF NOT EXISTS SUB_GOAL (
     UNIQUE (scenario_id, order_no)                     -- DUPLICATE_SUB_GOAL_ORDER
 );
 
+-- 실행 조건 스냅샷 ---------------------------------------------------------
+--
+-- 지표는 "어떤 조건에서 잰 값인가"가 붙어야 비교할 수 있다. 프롬프트를 고치거나
+-- 모델을 바꾸면 이전 수치와 나란히 놓을 수 없는데, 지금까지는 그 경계가 DB 어디에도
+-- 없었다 — 실제로 초기 295턴은 프롬프트가 여러 번 바뀌는 동안 한 덩어리로 쌓였다.
+--
+-- snapshot_id 는 아래 값들의 해시다. 조건이 같으면 같은 행을 재사용하므로, 세션을
+-- snapshot_id 로 묶으면 그게 곧 "같은 조건에서 잰 표본"이 된다.
+
+CREATE TABLE IF NOT EXISTS CONFIG_SNAPSHOT (
+    snapshot_id       TEXT PRIMARY KEY,           -- 내용 해시 12자
+    first_seen_at     TEXT NOT NULL,
+    git_sha           TEXT,                       -- Docker 이미지엔 .git 이 없어 NULL 가능
+    git_dirty         INTEGER,                    -- 커밋 안 된 수정이 있었나
+    prompts_sha       TEXT NOT NULL,              -- pipeline/prompts.py 내용 해시
+    agent_model       TEXT NOT NULL,
+    moderation_model  TEXT,                       -- NULL 이면 방어망 한 겹이 빠진 실행
+    base_url_host     TEXT NOT NULL,              -- 키는 절대 넣지 않는다. 호스트만
+    max_output_tokens INTEGER NOT NULL,
+    llm_timeout_s     REAL NOT NULL,
+    sdk_max_retries   INTEGER,                    -- SDK 가 조용히 재시도하는 횟수
+    max_candidates    INTEGER NOT NULL,
+    repair_attempts   INTEGER NOT NULL,
+    python_version    TEXT NOT NULL,
+    platform          TEXT NOT NULL,
+    in_docker         INTEGER NOT NULL
+);
+
 -- 세션과 턴 ---------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS ROLEPLAY_SESSION (
     session_id     TEXT PRIMARY KEY,
     scenario_id    TEXT NOT NULL REFERENCES SCENARIO(scenario_id),
+    snapshot_id    TEXT REFERENCES CONFIG_SNAPSHOT(snapshot_id),
     status         TEXT NOT NULL,                      -- SessionStatus
     phase          TEXT NOT NULL,                      -- ACTIVE | CLOSING | ENDED
     turn_index     INTEGER NOT NULL DEFAULT 0,
@@ -149,6 +178,9 @@ CREATE TABLE IF NOT EXISTS TURN_CANDIDATE (
 -- duration 만으로는 부족하다 — 목표 스캔과 생성 루프가 병렬이라 합계가 체감 시간과
 -- 다르다. 턴 시작 기준 오프셋이 있어야 콘솔에서 간트로 그리고 무엇이 실제로
 -- 병렬이었는지 볼 수 있다.
+-- 토큰은 시간과 짝이다. judge 가 3.8초 걸릴 때 프롬프트를 길게 읽어서인지 답을
+-- 길게 써서인지는 prompt/completion 을 나눠 봐야 안다. 속도 개선의 근거가 여기서
+-- 나오고, 단가를 곱하면 세션당 원가가 된다. 호출이 실패하면 전부 NULL 이다.
 CREATE TABLE IF NOT EXISTS STAGE_TIMING (
     timing_id       INTEGER PRIMARY KEY AUTOINCREMENT,
     turn_id         TEXT NOT NULL REFERENCES CONVERSATION_TURN(turn_id),
@@ -156,7 +188,13 @@ CREATE TABLE IF NOT EXISTS STAGE_TIMING (
     attempt_no      INTEGER,
     start_offset_ms INTEGER NOT NULL,
     duration_ms     INTEGER NOT NULL,
-    ok              INTEGER NOT NULL DEFAULT 1
+    ok              INTEGER NOT NULL DEFAULT 1,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    total_tokens      INTEGER,
+    finish_reason     TEXT,                       -- 'length' 면 max_tokens 에 잘렸다
+    response_model    TEXT,                       -- 서버가 실제로 쓴 모델
+    request_chars     INTEGER                     -- system+user 문자수
 );
 
 CREATE TABLE IF NOT EXISTS INTAKE_RESULT (

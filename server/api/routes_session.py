@@ -37,13 +37,21 @@ _draft_metrics: dict[str, dict] = {}
 _conn: sqlite3.Connection
 _client: LlmClient
 _moderation: ModerationClient
+# 이 프로세스가 어떤 조건(모델·프롬프트 버전·설정)으로 도는지. 세션마다 붙여 둬야
+# 나중에 "이 수치는 어느 버전의 것인가"에 답할 수 있다.
+_snapshot_id: str | None = None
 
 
 def configure(
-    *, conn: sqlite3.Connection, client: LlmClient, moderation: ModerationClient
+    *,
+    conn: sqlite3.Connection,
+    client: LlmClient,
+    moderation: ModerationClient,
+    snapshot_id: str | None = None,
 ) -> None:
-    global _conn, _client, _moderation
+    global _conn, _client, _moderation, _snapshot_id
     _conn, _client, _moderation = conn, client, moderation
+    _snapshot_id = snapshot_id
     _drafted.update(repo.load_generated_scenarios(conn))
     _draft_metrics.update(repo.load_generation_metrics(conn))
 
@@ -201,7 +209,7 @@ def create_session(request: CreateSessionRequest) -> dict:
     )
 
     repo.upsert_scenario(_conn, scenario)
-    repo.create_session(_conn, session)
+    repo.create_session(_conn, session, _snapshot_id)
     _live[session.session_id] = (session, scenario)
     return _session_view(session, scenario)
 

@@ -62,6 +62,14 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("SCENARIO", "generation_total_ms", "INTEGER"),
     ("SCENARIO", "generation_timings", "TEXT"),
     ("CONVERSATION_TURN", "hint_source", "TEXT NOT NULL DEFAULT 'NONE'"),
+    # 기존 행은 NULL 로 남는다 — 그게 맞다. 0 으로 채우면 "안 쟀다"가 "0 토큰"이 된다.
+    ("STAGE_TIMING", "prompt_tokens", "INTEGER"),
+    ("STAGE_TIMING", "completion_tokens", "INTEGER"),
+    ("STAGE_TIMING", "total_tokens", "INTEGER"),
+    ("STAGE_TIMING", "finish_reason", "TEXT"),
+    ("STAGE_TIMING", "response_model", "TEXT"),
+    ("STAGE_TIMING", "request_chars", "INTEGER"),
+    ("ROLEPLAY_SESSION", "snapshot_id", "TEXT"),
 )
 
 
@@ -298,14 +306,41 @@ def upsert_scenario(conn: sqlite3.Connection, scenario: Scenario) -> None:
     conn.commit()
 
 
-def create_session(conn: sqlite3.Connection, session: SessionState) -> None:
+def upsert_config_snapshot(conn: sqlite3.Connection, fields: dict) -> str:
+    """실행 조건을 한 행으로 남기고 그 id 를 돌려준다.
+
+    snapshot_id 가 내용 해시라서, 조건이 그대로면 같은 행을 다시 쓴다. 서버를 백 번
+    띄워도 조건이 안 바뀌었으면 행은 하나다.
+    """
+    columns = ", ".join(snapshot_fields())
+    marks = ", ".join("?" for _ in snapshot_fields())
+    conn.execute(
+        f"INSERT OR IGNORE INTO CONFIG_SNAPSHOT ({columns}, first_seen_at) "
+        f"VALUES ({marks}, ?)",
+        (*(fields[name] for name in snapshot_fields()), _now()),
+    )
+    conn.commit()
+    return fields["snapshot_id"]
+
+
+def snapshot_fields() -> tuple[str, ...]:
+    # 순환 import 를 피해 함수 안에서 읽는다 — app 은 db 를 알아도 되지만 반대는 아니다.
+    from app.snapshot import FIELDS
+
+    return FIELDS
+
+
+def create_session(
+    conn: sqlite3.Connection, session: SessionState, snapshot_id: str | None = None
+) -> None:
     conn.execute(
         """INSERT INTO ROLEPLAY_SESSION
-               (session_id, scenario_id, status, phase, turn_index, started_at)
-           VALUES (?,?,?,?,?,?)""",
+               (session_id, scenario_id, snapshot_id, status, phase, turn_index, started_at)
+           VALUES (?,?,?,?,?,?,?)""",
         (
             session.session_id,
             session.scenario_id,
+            snapshot_id,
             session.status.value,
             session.phase.value,
             session.turn_index,
@@ -442,8 +477,10 @@ def save_turn(
     for timing in record.timings:
         conn.execute(
             """INSERT INTO STAGE_TIMING
-                   (turn_id, stage, attempt_no, start_offset_ms, duration_ms, ok)
-               VALUES (?,?,?,?,?,?)""",
+                   (turn_id, stage, attempt_no, start_offset_ms, duration_ms, ok,
+                    prompt_tokens, completion_tokens, total_tokens,
+                    finish_reason, response_model, request_chars)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 turn_id,
                 timing.stage,
@@ -451,6 +488,12 @@ def save_turn(
                 timing.start_offset_ms,
                 timing.duration_ms,
                 int(timing.ok),
+                timing.prompt_tokens,
+                timing.completion_tokens,
+                timing.total_tokens,
+                timing.finish_reason,
+                timing.response_model,
+                timing.request_chars,
             ),
         )
 
@@ -837,6 +880,77 @@ def run_timing_stats(conn: sqlite3.Connection, run_id: str) -> list[dict]:
         }
         for stage, values in sorted(grouped.items())
     ]
+
+
+def run_token_stats(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    """단계별 토큰. 시간만으로는 "왜 느린가"에 답할 수 없다.
+
+    읽는 토큰(prompt)과 쓰는 토큰(completion)을 갈라야 어디를 줄일지 정해진다 —
+    프롬프트가 길어서 느린 단계는 프롬프트를 깎아야 하고, 출력이 길어서 느린 단계는
+    출력 형식을 줄여야 한다. 처방이 정반대다.
+
+    measured 는 토큰이 실제로 잡힌 호출 수다. Moderation 처럼 usage 가 없는 단계와
+    계측 전에 쌓인 옛 행은 여기서 0 으로 남는다 — 평균이 조용히 희석되지 않는다.
+    """
+    rows = conn.execute(
+        """
+        SELECT st.stage,
+               COUNT(*)                                 AS calls,
+               COUNT(st.total_tokens)                   AS measured,
+               COALESCE(SUM(st.prompt_tokens), 0)       AS prompt_sum,
+               COALESCE(SUM(st.completion_tokens), 0)   AS completion_sum,
+               COALESCE(SUM(st.total_tokens), 0)        AS total_sum,
+               SUM(CASE WHEN st.finish_reason = 'length' THEN 1 ELSE 0 END) AS truncated
+          FROM STAGE_TIMING st
+          JOIN TEST_TURN tt ON tt.turn_id = st.turn_id
+         WHERE tt.run_id = ?
+         GROUP BY st.stage
+        """,
+        (run_id,),
+    ).fetchall()
+
+    grand_total = sum(row["total_sum"] for row in rows) or 1
+    out = []
+    for row in rows:
+        measured = row["measured"]
+        out.append(
+            {
+                "stage": row["stage"],
+                "calls": row["calls"],
+                "measured": measured,
+                "prompt_avg": round(row["prompt_sum"] / measured) if measured else None,
+                "completion_avg": (
+                    round(row["completion_sum"] / measured) if measured else None
+                ),
+                "total_sum": row["total_sum"],
+                # 어느 단계가 이 실행의 토큰을 먹고 있는지. 깎을 곳을 여기서 고른다.
+                "share_pct": round(100 * row["total_sum"] / grand_total, 1),
+                "truncated": row["truncated"],
+            }
+        )
+    return sorted(out, key=lambda item: item["total_sum"], reverse=True)
+
+
+def load_config_snapshot(conn: sqlite3.Connection, snapshot_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM CONFIG_SNAPSHOT WHERE snapshot_id=?", (snapshot_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def run_snapshot_ids(conn: sqlite3.Connection, run_id: str) -> list[str]:
+    """이 실행의 세션들이 어떤 조건에서 돌았는지. 둘 이상이면 조건이 섞인 실행이라
+    지표를 한 덩어리로 읽으면 안 된다."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT s.snapshot_id
+          FROM TEST_TURN tt
+          JOIN ROLEPLAY_SESSION s ON s.session_id = tt.session_id
+         WHERE tt.run_id = ? AND s.snapshot_id IS NOT NULL
+        """,
+        (run_id,),
+    ).fetchall()
+    return [row[0] for row in rows]
 
 
 def _percentile(sorted_values: list[int], fraction: float) -> int:

@@ -257,13 +257,25 @@ class SessionState(BaseModel):
 
 class StageTiming(BaseModel):
     """duration만 저장하면 안 된다 — 병렬 구간이 있어 합계가 체감 시간과 다르다.
-    턴 시작 기준 오프셋이 있어야 콘솔에서 간트로 그릴 수 있다."""
+    턴 시작 기준 오프셋이 있어야 콘솔에서 간트로 그릴 수 있다.
+
+    시간만으로는 "왜 느린가"에 답할 수 없다. 3.8초 걸린 judge 가 프롬프트를 길게
+    읽어서인지 답을 길게 써서인지 구분하려면 토큰이 필요하다. 응답의 usage 를
+    버리고 있었기 때문에 그 구분도, 비용 계산도 불가능했다.
+    """
 
     stage: str
     start_offset_ms: int
     duration_ms: int
     ok: bool = True
     attempt_no: int | None = None
+    # 호출이 실패하면 전부 None 이다. 0 이 아니라 None 이어야 "안 쟀다"와 구분된다.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    finish_reason: str | None = None  # 'length' 면 max_tokens 에 잘린 것이다
+    response_model: str | None = None  # 서버가 실제로 쓴 모델. 설정값과 다를 수 있다
+    request_chars: int | None = None  # system+user 문자수. 토큰과 함께 봐야 한다
 
 
 class ModerationOutcome(BaseModel):

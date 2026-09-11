@@ -159,6 +159,68 @@ def render(conn: sqlite3.Connection, run_id: str, compare_id: str | None = None)
     write("")
     write(STAGE_ORDER_HINT)
 
+    # ---- 단계별 토큰
+    tokens = repo.run_token_stats(conn, run_id)
+    measured_any = any(row["measured"] for row in tokens)
+    write("")
+    write("## 단계별 토큰")
+    write("")
+    if not measured_any:
+        write("이 실행에는 토큰 계측이 없다 — 계측을 넣기 전에 쌓인 기록이다.")
+    else:
+        write("| 단계 | 호출 | 계측된 호출 | 읽은 토큰(평균) | 쓴 토큰(평균) | 합계 | 비중 | 잘림 |")
+        write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for row in tokens:
+            prompt_avg = row["prompt_avg"] if row["prompt_avg"] is not None else "—"
+            completion_avg = (
+                row["completion_avg"] if row["completion_avg"] is not None else "—"
+            )
+            write(
+                f"| `{row['stage']}` | {row['calls']} | {row['measured']}"
+                f" | {prompt_avg} | {completion_avg} | {row['total_sum']}"
+                f" | {row['share_pct']}% | {row['truncated'] or ''} |"
+            )
+        write("")
+        write("시간표와 나란히 읽어야 처방이 갈린다 — 읽은 토큰이 커서 느린 단계는")
+        write("프롬프트를 깎아야 하고, 쓴 토큰이 커서 느린 단계는 출력 형식을 줄여야 한다.")
+        write("Moderation 은 usage 를 주지 않아 계측된 호출이 0 이다.")
+        write("'잘림'은 finish_reason=length — max_tokens 에 걸려 답이 중간에 끊긴 호출이다.")
+
+    # ---- 실행 조건
+    snapshot_ids = repo.run_snapshot_ids(conn, run_id)
+    write("")
+    write("## 실행 조건")
+    write("")
+    if not snapshot_ids:
+        write("이 실행의 세션에는 조건 스냅샷이 없다 — 스냅샷을 넣기 전에 쌓인 기록이라")
+        write("어느 프롬프트·설정에서 잰 수치인지 되짚을 수 없다.")
+    else:
+        if len(snapshot_ids) > 1:
+            write(f"> 조건이 **{len(snapshot_ids)}종 섞인 실행**이다. 아래 수치를 한 덩어리로")
+            write("> 읽으면 안 된다 — 서로 다른 프롬프트·설정의 결과가 합쳐져 있다.")
+            write("")
+        for snapshot_id in snapshot_ids:
+            snap = repo.load_config_snapshot(conn, snapshot_id)
+            if not snap:
+                continue
+            dirty = " (커밋 안 된 수정 있음)" if snap["git_dirty"] else ""
+            write(f"**`{snapshot_id}`**")
+            write("")
+            write(f"- 코드 `{snap['git_sha'] or '알 수 없음'}`{dirty}"
+                  f" · 프롬프트 `{snap['prompts_sha']}`")
+            write(f"- 모델 **{snap['agent_model']}** · Moderation "
+                  f"**{snap['moderation_model'] or '미설정'}** · `{snap['base_url_host']}`")
+            write(f"- max_tokens {snap['max_output_tokens']}"
+                  f" · 타임아웃 {snap['llm_timeout_s']}초"
+                  f" · SDK 재시도 {snap['sdk_max_retries']}회"
+                  f" · 후보 최대 {snap['max_candidates']}회"
+                  f" · 수리 재시도 {snap['repair_attempts']}회")
+            write(f"- Python {snap['python_version']} · {snap['platform']}"
+                  f" · {'Docker' if snap['in_docker'] else '로컬'}")
+            write("")
+        write("프롬프트 해시가 다르면 이전 회차와 나란히 놓을 수 없다 — 판정 기준이 바뀌면")
+        write("통과율과 재생성률이 같이 움직이기 때문이다.")
+
     # ---- 서버 밖 오버헤드
     if turns:
         overhead = _overhead(turns)

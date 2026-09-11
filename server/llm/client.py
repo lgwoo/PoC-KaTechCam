@@ -19,7 +19,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
@@ -31,6 +31,47 @@ from state.models import StageTiming
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
+
+
+class CallResult(NamedTuple):
+    """한 번의 LLM 호출에서 건져낸 것 전부.
+
+    본문만 돌려주면 usage 가 함수를 벗어나지 못하고 사라진다. 그 상태로는 단계별
+    소요 시간이 있어도 프롬프트가 길어서 느린 건지 출력이 길어서 느린 건지 나눌 수
+    없고, 토큰 단가를 곱할 수 없으니 세션당 원가도 못 낸다.
+    """
+
+    text: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    finish_reason: str | None
+    response_model: str | None
+    request_chars: int
+
+
+class SpanSlot:
+    """호출이 끝나야 알 수 있는 값을 span 이 닫히기 전에 받아 두는 자리.
+
+    토큰과 finish_reason 은 응답이 와야 정해지는데 span 은 진입 시점에 열린다.
+    아무도 채우지 않으면 전부 None 으로 남는다 — Moderation 처럼 usage 가 없는
+    호출이 그렇다.
+    """
+
+    __slots__ = ("fields",)
+
+    def __init__(self) -> None:
+        self.fields: dict[str, object] = {}
+
+    def attach(self, result: CallResult) -> None:
+        self.fields = {
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.total_tokens,
+            "finish_reason": result.finish_reason,
+            "response_model": result.response_model,
+            "request_chars": result.request_chars,
+        }
 
 
 class StageRecorder:
@@ -49,12 +90,13 @@ class StageRecorder:
         return int((time.monotonic() - self._t0) * 1000)
 
     @contextlib.contextmanager
-    def span(self, stage: str, attempt_no: int | None = None) -> Iterator[None]:
+    def span(self, stage: str, attempt_no: int | None = None) -> Iterator[SpanSlot]:
+        slot = SpanSlot()
         start = time.monotonic()
         offset_ms = int((start - self._t0) * 1000)
         ok = True
         try:
-            yield
+            yield slot
         except Exception:
             ok = False
             raise
@@ -66,6 +108,7 @@ class StageRecorder:
                     duration_ms=int((time.monotonic() - start) * 1000),
                     ok=ok,
                     attempt_no=attempt_no,
+                    **slot.fields,
                 )
             )
 
@@ -92,14 +135,28 @@ class LlmClient:
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self._model = model
         self._max_tokens = max_tokens
+        self._timeout = timeout
 
     @property
     def model(self) -> str:
         return self._model
 
+    @property
+    def timeout_s(self) -> float:
+        return self._timeout
+
+    @property
+    def sdk_max_retries(self) -> int | None:
+        """SDK 가 조용히 재시도하는 횟수.
+
+        이 재시도는 span 안에서 일어나서 duration_ms 하나에 접혀 들어간다. 값을
+        남겨 두지 않으면 느린 호출이 정말 느린 건지 재시도가 섞인 건지 모른다.
+        """
+        return getattr(self._client, "max_retries", None)
+
     async def _call(
         self, *, system: str, user: str, json_mode: bool
-    ) -> str:
+    ) -> CallResult:
         kwargs: dict = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
@@ -113,7 +170,19 @@ class LlmClient:
             ],
             **kwargs,
         )
-        return (response.choices[0].message.content or "").strip()
+        # OpenAI 호환 엔드포인트라도 usage 를 안 주는 경우가 있다. 없으면 None 으로
+        # 남기고 넘어간다 — 계측이 없다고 호출을 실패시킬 일은 아니다.
+        choice = response.choices[0] if response.choices else None
+        usage = getattr(response, "usage", None)
+        return CallResult(
+            text=(choice.message.content or "").strip() if choice else "",
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+            finish_reason=getattr(choice, "finish_reason", None) if choice else None,
+            response_model=getattr(response, "model", None),
+            request_chars=len(system) + len(user),
+        )
 
     async def text(
         self,
@@ -126,8 +195,10 @@ class LlmClient:
     ) -> str:
         """평문 응답. 캐릭터 대사처럼 구조가 필요 없는 것에 쓴다."""
         try:
-            with recorder.span(stage, attempt_no):
-                return await self._call(system=system, user=user, json_mode=False)
+            with recorder.span(stage, attempt_no) as slot:
+                result = await self._call(system=system, user=user, json_mode=False)
+                slot.attach(result)
+                return result.text
         except Exception as exc:
             raise LlmCallError(stage, exc) from exc
 
@@ -149,8 +220,10 @@ class LlmClient:
         system_with_schema = f"{system}\n\n{_JSON_INSTRUCTION.format(schema=schema_hint(contract))}"
 
         try:
-            with recorder.span(stage, attempt_no):
-                raw = await self._call(system=system_with_schema, user=user, json_mode=True)
+            with recorder.span(stage, attempt_no) as slot:
+                result = await self._call(system=system_with_schema, user=user, json_mode=True)
+                slot.attach(result)
+                raw = result.text
         except Exception as exc:
             raise LlmCallError(stage, exc) from exc
 
@@ -169,10 +242,12 @@ class LlmClient:
             f"위 오류를 고쳐 같은 내용을 올바른 JSON 으로만 다시 출력하라."
         )
         try:
-            with recorder.span(f"{stage}.repair", attempt_no):
-                repaired = await self._call(
+            with recorder.span(f"{stage}.repair", attempt_no) as slot:
+                repair_result = await self._call(
                     system=system_with_schema, user=repair_user, json_mode=True
                 )
+                slot.attach(repair_result)
+                repaired = repair_result.text
         except Exception as exc:
             raise LlmCallError(f"{stage}.repair", exc) from exc
 
