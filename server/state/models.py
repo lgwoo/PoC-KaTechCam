@@ -190,7 +190,7 @@ class Scenario(BaseModel):
     # 지원 수준별 유도 문구. chat.ts에서는 죽은 fixture였다 — 이제 도움 세기 조정이 실제로 쓴다.
     opening_prompts: dict[SupportLevel, str]
     maximum_support_turns_per_micro_goal: int = 4
-    maximum_turn_count: int = 6
+    maximum_turn_count: int = 12
 
     def goal(self, goal_id: str) -> MicroGoal | None:
         return next((g for g in self.micro_goals if g.id == goal_id), None)
